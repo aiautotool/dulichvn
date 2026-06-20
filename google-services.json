@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "959396812028",
+    "project_id": "vinago-e7476",
+    "storage_bucket": "vinago-e7476.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:959396812028:android:56a9ce795ce6b58e8e7379",
+        "android_client_info": {
+          "package_name": "com.vinago.plus"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "959396812028-kebdshs109pum50s7of7eqe27odlgh3l.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.vinago.plus",
+            "certificate_hash": "8B:F8:C4:C1:9D:D3:F8:0B:88:AE:3C:A2:7A:87:7D:AE:15:18:35:FF"
+          }
+        },
+        {
+          "client_id": "959396812028-5uedsvgcclv8ngjs97enll5tlmld45oa.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBuyNXVNHcKDBdQLEmP4Z_NxFTwQLhtcps"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "959396812028-5uedsvgcclv8ngjs97enll5tlmld45oa.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

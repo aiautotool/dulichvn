@@ -1,17 +1,21 @@
 {
   "expo": {
-    "name": "dulichvn",
-    "slug": "dulichvn",
+    "name": "Vinago+",
+    "slug": "vinago-plus",
     "version": "1.0.0",
+    "scheme": "vinagoplus",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
+      "bundleIdentifier": "com.vinago.plus",
       "supportsTablet": true
     },
     "android": {
+      "package": "com.vinago.plus",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#EAF6F2",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -19,7 +23,20 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
+      "bundler": "metro",
+      "output": "single",
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "googleAnalytics": {
+        "propertyName": "vinago-e7476",
+        "propertyId": "542368554",
+        "streamId": "15118007638"
+      }
+    },
+    "plugins": [
+      "expo-web-browser",
+      "expo-mail-composer"
+    ]
   }
 }

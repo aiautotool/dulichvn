@@ -1,22 +1,38 @@
 {
-  "name": "dulichvn",
+  "name": "vinago-plus",
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
+    "@expo/metro-runtime": "~56.0.15",
+    "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~56.0.12",
+    "expo-auth-session": "~56.0.14",
+    "expo-crypto": "~56.0.4",
+    "expo-mail-composer": "~56.0.4",
     "expo-status-bar": "~56.0.4",
+    "expo-web-browser": "~56.0.5",
+    "lucide-react-native": "^1.21.0",
     "react": "19.2.3",
-    "react-native": "0.85.3"
+    "react-dom": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-svg": "15.15.4",
+    "react-native-web": "^0.21.2"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260619.1",
     "@types/react": "~19.2.2",
     "typescript": "~6.0.3"
   },
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "export:web": "npx expo export --platform web",
+    "deploy:cloudflare": "npm run export:web && npx wrangler deploy",
+    "deploy:cloudflare:global": "./scripts/deploy-cloudflare-global.sh",
+    "deploy:worker": "./scripts/deploy-worker.sh",
+    "typecheck": "node --stack-size=20000 ./node_modules/typescript/bin/tsc --noEmit"
   },
   "private": true
 }

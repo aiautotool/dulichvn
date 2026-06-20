@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vinago-plus",
+  "main": "./src/worker.ts",
+  "compatibility_date": "2026-06-19",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "vars": {
+    "ITINERARY_EMAIL_FROM": "Vinago+ <itinerary@aiautotool.com>"
+  },
+  "routes": [
+    {
+      "pattern": "vinago.aiautotool.com",
+      "custom_domain": true
+    }
+  ]
+}
