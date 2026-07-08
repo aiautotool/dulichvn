@@ -14,6 +14,8 @@ import {
 } from '../types';
 import { LiveCallService } from './LiveCallService';
 import { PaymentEscrowService } from './PaymentEscrowService';
+import type { JobNotificationService } from '../../notifications/services/JobNotificationService';
+import type { LivePreviewPurchase } from '../../payments/types';
 
 const DEFAULT_HELPER_RADIUS_KM = 3;
 
@@ -23,6 +25,7 @@ export class LivePreviewService {
     private readonly localHelperRepository: LocalHelperRepository,
     private readonly paymentEscrowService: PaymentEscrowService,
     private readonly liveCallService: LiveCallService,
+    private readonly jobNotificationService?: JobNotificationService,
   ) {}
 
   async createRequest(input: CreateLivePreviewRequestInput): Promise<LivePreviewRequest> {
@@ -33,7 +36,9 @@ export class LivePreviewService {
     const request = await this.requireRequest(requestId);
     this.assertTravelerOwner(request, traveler);
     const withIntent = await this.paymentEscrowService.createPaymentIntent(request);
-    return this.paymentEscrowService.captureToEscrow(withIntent.id);
+    const published = await this.paymentEscrowService.captureToEscrow(withIntent.id);
+    await this.jobNotificationService?.notifyNewLivePreviewJob(published);
+    return published;
   }
 
   async createPaidRequest(
@@ -42,6 +47,19 @@ export class LivePreviewService {
   ): Promise<LivePreviewRequest> {
     const request = await this.createRequest(input);
     return this.payAndPublish(request.id, traveler);
+  }
+
+
+  async createGooglePlayPaidRequest(
+    input: CreateLivePreviewRequestInput,
+    traveler: LivePreviewActor,
+    purchase: LivePreviewPurchase,
+  ): Promise<LivePreviewRequest> {
+    const request = await this.createRequest(input);
+    this.assertTravelerOwner(request, traveler);
+    const published = await this.paymentEscrowService.captureGooglePlayPurchase(request.id, purchase);
+    await this.jobNotificationService?.notifyNewLivePreviewJob(published);
+    return published;
   }
 
   async getRequest(requestId: string): Promise<LivePreviewRequest | null> {

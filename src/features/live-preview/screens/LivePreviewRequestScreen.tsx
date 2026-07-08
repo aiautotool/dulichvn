@@ -59,6 +59,16 @@ export function LivePreviewRequestScreen({
         <Text style={styles.body}>{place.description}</Text>
       </View>
 
+      <View style={styles.walletPanel}>
+        <Text style={styles.sectionTitle}>Google Play checkout</Text>
+        <Text style={styles.body}>
+          Pay once for this live preview session. No wallet top-up, no coins, and no stored travel credits.
+        </Text>
+        <Text style={styles.noticeText}>
+          Production Android builds must create a consumable Google Play product named live_preview_session_1 and verify the purchase token on the backend before publishing the helper job.
+        </Text>
+      </View>
+
       <View style={styles.metricRow}>
         <View style={styles.metricCard}>
           <DollarSign color="#da251d" size={20} />
@@ -121,7 +131,7 @@ export function LivePreviewRequestScreen({
           disabled={isSubmitting}
         >
           <DollarSign color="#ffffff" size={18} />
-          <Text style={styles.primaryButtonText}>{isSubmitting ? 'Requesting...' : 'Pay $1 and request live preview'}</Text>
+          <Text style={styles.primaryButtonText}>{isSubmitting ? 'Opening Google Play...' : 'Pay $1 with Google Play and broadcast job'}</Text>
         </Pressable>
         <Pressable style={styles.secondaryButton} onPress={onBack}>
           <Text style={styles.secondaryButtonText}>Back to destination</Text>
@@ -177,6 +187,11 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     textAlignVertical: 'top',
   },
+  walletPanel: { padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#f3c7c4', gap: 10, backgroundColor: '#fff5f5' },
+  walletAmount: { color: '#1a1a1a', fontSize: 24, fontWeight: '900' },
+  topUpRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  topUpButton: { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 8, backgroundColor: '#da251d' },
+  topUpText: { color: '#ffffff', fontWeight: '900' },
   notice: { flexDirection: 'row', gap: 10, padding: 12, borderRadius: 10, backgroundColor: '#fff7ed' },
   noticeText: { flex: 1, color: '#8a4b08', fontSize: 13, fontWeight: '800', lineHeight: 19 },
   errorText: { color: '#da251d', fontWeight: '900' },
