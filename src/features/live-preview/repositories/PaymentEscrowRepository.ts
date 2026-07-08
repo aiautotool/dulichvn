@@ -10,7 +10,7 @@ export type PaymentEscrowLedgerEvent = {
   requestId: string;
   type: PaymentEscrowLedgerEventType;
   amountCents: number;
-  provider: 'mock' | 'stripe';
+  provider: 'mock' | 'stripe' | 'wallet' | 'google_play' | 'demo';
   providerReferenceId: string | null;
   createdAt: string;
 };

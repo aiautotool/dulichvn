@@ -82,6 +82,11 @@ import { WebView } from 'react-native-webview';
 import { MockLiveCallRepository } from './src/features/live-preview/repositories/MockLiveCallRepository';
 import { MockLivePreviewRepository } from './src/features/live-preview/repositories/MockLivePreviewRepository';
 import { MockPaymentEscrowRepository } from './src/features/live-preview/repositories/MockPaymentEscrowRepository';
+import { MockWalletRepository } from './src/features/wallet/repositories/MockWalletRepository';
+import { WalletService } from './src/features/wallet/services/WalletService';
+import type { WalletBalance } from './src/features/wallet/types';
+import { BroadcastJobNotificationService } from './src/features/notifications/services/JobNotificationService';
+import { DemoGooglePlayBillingProvider, GooglePlayBillingProvider } from './src/features/payments/services/GooglePlayBillingProvider';
 import { LiveCallService } from './src/features/live-preview/services/LiveCallService';
 import { LivePreviewService } from './src/features/live-preview/services/LivePreviewService';
 import { PaymentEscrowService } from './src/features/live-preview/services/PaymentEscrowService';
@@ -147,6 +152,13 @@ import {
   type AccountAuthUser,
 } from './src/features/account/services/firebaseAccount';
 import { AppLanguageProvider, translateStaticText, useTranslatedData } from './src/lib/translation';
+import {
+  PlaceRealityCard,
+  RealityActionButtons,
+  RealityScoreCard,
+  TravelDecisionCard,
+} from './src/features/reality-layer/components/RealityLayerCards';
+import { buildDemoRealityLayer } from './src/features/reality-layer/services/demoRealityLayer';
 import type { TranslationLanguageCode } from './src/lib/translation/language';
 
 /* ============================================================
@@ -390,14 +402,21 @@ const privacyPolicyUrl =
 const livePreviewRepository = new MockLivePreviewRepository();
 const liveCallRepository = new MockLiveCallRepository();
 const paymentEscrowRepository = new MockPaymentEscrowRepository();
+const walletRepository = new MockWalletRepository();
+const walletService = new WalletService(walletRepository);
+const livePreviewPaymentProvider = process.env.EXPO_PUBLIC_ENABLE_REAL_GOOGLE_PLAY_BILLING === 'true'
+  ? new GooglePlayBillingProvider()
+  : new DemoGooglePlayBillingProvider();
+const jobNotificationService = new BroadcastJobNotificationService();
 const localHelperRepository = new MockLocalHelperRepository(livePreviewRepository);
 const liveCallService = new LiveCallService(liveCallRepository);
-const paymentEscrowService = new PaymentEscrowService(livePreviewRepository, paymentEscrowRepository);
+const paymentEscrowService = new PaymentEscrowService(livePreviewRepository, paymentEscrowRepository, walletService);
 const livePreviewService = new LivePreviewService(
   livePreviewRepository,
   localHelperRepository,
   paymentEscrowService,
   liveCallService,
+  jobNotificationService,
 );
 const localHelperService = new LocalHelperService(localHelperRepository, livePreviewService);
 
@@ -2680,6 +2699,10 @@ function PlaceDetailScreen({
   t: (key: TranslationKey) => string;
 }) {
   const { data: translatedPlace } = useTranslatedData(place);
+  const realityLayer = useMemo(
+    () => buildDemoRealityLayer({ id: place.id, name: translatedPlace.name, lat: place.lat, lng: place.lng }),
+    [place.id, place.lat, place.lng, translatedPlace.name],
+  );
   return (
     <ScrollView contentContainerStyle={styles.placeDetailContent} showsVerticalScrollIndicator={false}>
       <View style={styles.placeDetailImageWrap}>
@@ -2749,16 +2772,10 @@ function PlaceDetailScreen({
           </View>
           <Text style={styles.mapOpenLink}>{t('place.openInMaps')}</Text>
         </Pressable>
-        <Pressable style={styles.livePreviewCta} onPress={onOpenLivePreview}>
-          <View style={styles.livePreviewIcon}>
-            <Camera color={colors.surface} size={18} />
-          </View>
-          <View style={styles.livePreviewCopy}>
-            <Text style={styles.livePreviewTitle}>See this place live</Text>
-            <Text style={styles.livePreviewBody}>Ask a local to show you around live for $1.</Text>
-          </View>
-          <ChevronRight color={colors.primary} size={18} />
-        </Pressable>
+        <PlaceRealityCard status={realityLayer.status} />
+        <TravelDecisionCard decision={realityLayer.decision} />
+        <RealityActionButtons onLivePreview={onOpenLivePreview} />
+        <RealityScoreCard score={realityLayer.score} />
         <PrimaryButton
           label={isFavorite ? t('place.saved') : t('place.save')}
           onPress={onToggleFavorite}
@@ -4466,6 +4483,8 @@ function TravelApp() {
   const [livePreviewRequest, setLivePreviewRequest] = useState<LivePreviewRequest | null>(null);
   const [livePreviewRole, setLivePreviewRole] = useState<LivePreviewActorRole>('traveler');
   const [livePreviewError, setLivePreviewError] = useState<string | null>(null);
+  const [walletBalance, setWalletBalance] = useState<WalletBalance | null>(null);
+  const [isWalletTopUpSubmitting, setIsWalletTopUpSubmitting] = useState(false);
   const [isLivePreviewSubmitting, setIsLivePreviewSubmitting] = useState(false);
   const [localHelperProfile, setLocalHelperProfile] = useState<LocalHelperProfile | null>(null);
   const [localHelperJobs, setLocalHelperJobs] = useState<LocalHelperJob[]>([]);
@@ -5072,12 +5091,36 @@ function TravelApp() {
     recordActivity('navigation', 'Opened live preview request', selectedPlace.name);
   };
 
+  const refreshWalletBalance = async () => {
+    try {
+      const balance = await walletService.getBalance(currentUserId);
+      setWalletBalance(balance);
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not refresh wallet balance');
+    }
+  };
+
+  const topUpWallet = async (amountCents: number) => {
+    setIsWalletTopUpSubmitting(true);
+    setLivePreviewError(null);
+    try {
+      const balance = await walletService.topUp(currentUserId, amountCents);
+      setWalletBalance(balance);
+      recordActivity('content', 'Topped up wallet', `$${(amountCents / 100).toFixed(2)}`);
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not top up wallet');
+    } finally {
+      setIsWalletTopUpSubmitting(false);
+    }
+  };
+
   const createLivePreviewRequest = async (input: { requestedLanguage: string; note: string }) => {
     setIsLivePreviewSubmitting(true);
     setLivePreviewError(null);
     const traveler = getTravelerActor();
     try {
-      const request = await livePreviewService.createPaidRequest(
+      const purchase = await livePreviewPaymentProvider.purchaseLivePreviewSession();
+      const request = await livePreviewService.createGooglePlayPaidRequest(
         {
           placeId: selectedPlace.id,
           placeName: selectedPlace.name,
@@ -5090,10 +5133,12 @@ function TravelApp() {
           note: input.note,
         },
         traveler,
+        purchase,
       );
       setLivePreviewRequest(request);
       setLivePreviewRole('traveler');
       setActiveTab('live_preview_waiting');
+      await refreshWalletBalance();
       recordActivity('content', 'Requested live preview', `${request.placeName} · escrowed`);
     } catch (error) {
       setLivePreviewError(error instanceof Error ? error.message : 'Could not create live preview request');
@@ -5148,6 +5193,7 @@ function TravelApp() {
       setLivePreviewRequest(request);
       recordActivity('content', 'Confirmed live preview completion', request.placeName);
       void refreshLocalHelperEarnings();
+      await refreshWalletBalance();
     } catch (error) {
       setLivePreviewError(error instanceof Error ? error.message : 'Could not confirm completion');
     }
@@ -5173,6 +5219,7 @@ function TravelApp() {
       const request = await livePreviewService.cancelRequest(livePreviewRequest.id, getTravelerActor());
       setLivePreviewRequest(request);
       recordActivity('content', 'Cancelled live preview', request.placeName);
+      await refreshWalletBalance();
     } catch (error) {
       setLivePreviewError(error instanceof Error ? error.message : 'Could not cancel request');
     }
