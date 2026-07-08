@@ -78,7 +78,7 @@ The function does not call any network. It is intentionally fast and offline-saf
 The "Gửi email" button on either the AI screen or the preview screen:
 
 - If `authSession` is missing, shows the localized `email.signInRequired` status.
-- If `EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT` is set **and** a Google `id_token` is cached, the app POSTs `{ to, name, itinerary, profile }` to the endpoint with header `Authorization: Bearer <googleIdToken>`:
+- If `EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT` is set **and** Firebase Auth can provide a fresh ID token, the app POSTs `{ to, name, itinerary, profile }` to the endpoint with header `Authorization: Bearer <firebaseIdToken>`:
   - On a 2xx response, fires `itinerary_email_sent` (`delivery_mode: 'endpoint'`) and shows `email.sent`.
   - On a non-2xx response, fires `itinerary_email_failed` and shows `email.failed`.
   - Records `email` activity either way.

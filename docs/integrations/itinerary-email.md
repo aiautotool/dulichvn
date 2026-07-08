@@ -2,10 +2,10 @@
 
 The email-confirmation flow sends the user's generated itinerary to the email address tied to their Google account. It can be handled in one of two ways:
 
-- **Endpoint configured **and** a Google `id_token` is cached:** the app POSTs the itinerary to a backend (the bundled Cloudflare Worker) and the backend sends through Resend.
-- **Otherwise (no endpoint, or no cached `id_token` after a full app restart):** the app opens the OS email composer (`expo-mail-composer`) with the itinerary prefilled.
+- **Endpoint configured and a Firebase ID token is available:** the app POSTs the itinerary to a backend (the bundled Cloudflare Worker) and the backend sends through Resend.
+- **Otherwise:** the app opens the OS email composer (`expo-mail-composer`) with the itinerary prefilled.
 
-The choice is driven by the `EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT` env var and whether `googleIdToken` is populated.
+The choice is driven by the `EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT` env var and whether the native Firebase Auth session can provide `firebaseUser.getIdToken()`.
 
 ## Endpoint Contract
 
@@ -13,7 +13,7 @@ The choice is driven by the `EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT` env var and w
 
 ```
 POST {EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT}
-Authorization: Bearer <googleIdToken>
+Authorization: Bearer <firebaseIdToken>
 Content-Type: application/json
 
 {

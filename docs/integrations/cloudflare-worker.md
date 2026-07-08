@@ -70,6 +70,7 @@ Helpers:
 ## Security Notes
 
 - The Google ID token is **not** cryptographically verified by the Worker. It only checks the `email_verified` claim and matches the recipient. A real production deployment should verify the JWT signature against Google's JWKS.
+- QR web login sessions are stored in Worker runtime memory for this MVP. They are short-lived and fine for development, but production should move them to Durable Objects, KV, or D1 so sessions survive isolate eviction and can be rate-limited centrally.
 - The Worker is reachable at `https://vinago.aiautotool.com/api/itinerary-email`. There is no rate limiting or abuse protection; the Google ID token check is the only gate. Add a rate limit or Turnstile check before opening the endpoint to the public.
 - The Worker echoes the request `Origin` in `Access-Control-Allow-Origin`. This is fine for browser clients but means a malicious site could make a victim's browser send a request on their behalf; the email recipient must still match the token's `email`, so the worst case is that an attacker spams a victim's Google account email.
 - `RESEND_API_KEY` is a Wrangler secret. Never commit it; never expose it to the client.

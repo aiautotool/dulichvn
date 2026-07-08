@@ -7,7 +7,7 @@ The MVP in this repo is a local-data-first travel companion. The "next integrati
 - Onboarding: language, purpose, city, trip days.
 - Home, Explore, Food, Culture, Phrases, AI, Favorites, Profile screens.
 - Local persistence (AsyncStorage) for profile, favorites, auth session, activity history, analytics queue.
-- Google sign-in via `expo-auth-session` (web + native).
+- Google sign-in via native Google Sign-In + Firebase Auth on iOS/Android, with QR approval for web login.
 - GA4 event taxonomy with gtag on web and AsyncStorage queue on native / unconfigured web.
 - Itinerary generation (local deterministic answer).
 - Itinerary email via Cloudflare Worker + Resend, with OS composer fallback.
@@ -16,7 +16,7 @@ The MVP in this repo is a local-data-first travel companion. The "next integrati
 ## Next Integrations (per `README.md`)
 
 - **OpenAI API** for real chat, translation, and camera guide.
-- **Expo Location + Google Maps / Places** for nearby suggestions.
+- **Expo Location + OpenStreetMap/Places provider** for nearby suggestions.
 - **SQLite city packs** for richer offline data.
 
 ## Engineering Backlog
@@ -27,12 +27,12 @@ The MVP in this repo is a local-data-first travel companion. The "next integrati
 - Wire the queued AsyncStorage events to a server-side endpoint so native analytics can drain.
 - Add per-locale content for `places` and `foods` (see [Localization](./localization.md)).
 - Translate `phrases.pronunciation` into other scripts (Hanja, Kana, etc.).
-- Add voice output (TTS) to the phrase cards; the buttons exist, the audio is not wired.
+- Improve phrase audio with selectable voices, speed controls, and offline audio caching.
 
 ### Maps & Location
 
 - Add `expo-location` and request foreground permission on Explore / AI tabs.
-- Render the `lat` / `lng` values from the `places` catalog on a map preview inside the place detail.
+- Add richer place-detail map previews, clustering, and route previews.
 - Use the Google Places API to enrich or replace the local `places` catalog.
 - Provide real "Nearby with GPS" recommendations (currently a locked module placeholder).
 
@@ -57,7 +57,7 @@ The MVP in this repo is a local-data-first travel companion. The "next integrati
 
 ### Mobile
 
-- Add `GoogleService-Info.plist` for iOS and re-issue `google-services.json` for `com.vinago.plus` (see [Native Builds](./development/native-builds.md)).
+- Re-issue `google-services.json` if Android moves from `com.vinago.dev` to `com.vinago.plus` (see [Native Builds](./development/native-builds.md)).
 - Wire a native analytics SDK (Firebase Analytics or `@react-native-firebase/analytics`) for native event reporting.
 - Add iOS / Android unit tests; right now there are no test files.
 - Add E2E tests with Detox or Maestro for the onboarding and itinerary flows.

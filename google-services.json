@@ -9,16 +9,16 @@
       "client_info": {
         "mobilesdk_app_id": "1:959396812028:android:56a9ce795ce6b58e8e7379",
         "android_client_info": {
-          "package_name": "com.vinago.plus"
+          "package_name": "com.vinago.dev"
         }
       },
       "oauth_client": [
         {
-          "client_id": "959396812028-kebdshs109pum50s7of7eqe27odlgh3l.apps.googleusercontent.com",
+          "client_id": "959396812028-0qp9rs1fng9h3dcevha15r3sbvlafg30.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.vinago.plus",
-            "certificate_hash": "8B:F8:C4:C1:9D:D3:F8:0B:88:AE:3C:A2:7A:87:7D:AE:15:18:35:FF"
+            "package_name": "com.vinago.dev",
+            "certificate_hash": "0d413a48963947f2ea3e373e336c5dc4d9982d42"
           }
         },
         {

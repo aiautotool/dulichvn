@@ -2,20 +2,22 @@
   "expo": {
     "name": "Vinago+",
     "slug": "vinago-plus",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "scheme": "vinagoplus",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "com.vinago.plus",
+      "googleServicesFile": "./GoogleService-Info.plist",
       "supportsTablet": true
     },
     "android": {
-      "package": "com.vinago.plus",
+      "package": "com.vinago.dev",
+      "versionCode": 2,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "backgroundColor": "#EAF6F2",
+        "backgroundColor": "#DA251D",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -35,8 +37,32 @@
       }
     },
     "plugins": [
-      "expo-web-browser",
-      "expo-mail-composer"
+      "@react-native-google-signin/google-signin",
+      "./plugins/with-google-signin-modular-headers",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ],
+      "expo-mail-composer",
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Vinago+ to use your location to show nearby live preview jobs."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Vinago+ to use your camera to scan web login QR codes.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ]
     ]
   }
 }

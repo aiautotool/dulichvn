@@ -21,7 +21,7 @@ The Place Detail screen is reached by tapping any place card (Home, Explore, Fav
 | `PlaceDetailScreen` component | Renders the screen. |
 | `selectedPlace` derived in `App` | The `Place` object for `selectedPlaceId`. |
 | `isFavorite` / `onToggleFavorite` | From `App` (lifted state). |
-| `openInMaps(place)` | Helper that opens the native maps app via `Linking.openURL` with a Google Maps web fallback. |
+| `openInMaps(place)` | Helper that opens the native maps app via `Linking.openURL` with an OpenStreetMap web fallback. |
 
 ## Tracked Events
 
@@ -38,5 +38,5 @@ The Place Detail screen is reached by tapping any place card (Home, Explore, Fav
 ## Edge Cases
 
 - The Save button toggles state. The heart icon is filled when the place is in `favorites` and outline otherwise.
-- The map preview always shows `lat` and `lng`; if the user is on web, the Open in Maps link opens a Google Maps search in a new tab.
+- The map preview always shows `lat` and `lng`; if the user is on web, the Open in Maps link opens the location on OpenStreetMap.
 - The "Open in Maps" link is only shown when the place has `lat` and `lng` populated. All curated places have coordinates.

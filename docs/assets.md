@@ -9,11 +9,26 @@ This page lists every image bundled with the app, where it is used, and the lice
 | `assets/icon.png` | `app.json.icon` (iOS, Android, web) | 1024×1024 master icon. |
 | `assets/splash-icon.png` | Splash | Same artwork, splash crop. |
 | `assets/favicon.png` | `app.json.web.favicon` | Web tab icon. |
-| `assets/android-icon-background.png` | `app.json.android.adaptiveIcon.backgroundImage` | Light teal background. |
+| `assets/android-icon-background.png` | `app.json.android.adaptiveIcon.backgroundImage` | Red brand background. |
 | `assets/android-icon-foreground.png` | `app.json.android.adaptiveIcon.foregroundImage` | Foreground. |
 | `assets/android-icon-monochrome.png` | `app.json.android.adaptiveIcon.monochromeImage` | Themed icon. |
 
-The splash background color is implicit (the platform default) and the adaptive-icon background color is `#EAF6F2`.
+The splash background color is implicit (the platform default) and the adaptive-icon background color is `#DA251D`.
+
+The editable SVG sources for the launcher artwork live in `assets/source/`. Android native resources under `android/app/src/main/res/` are generated from the same artwork for local Gradle builds.
+
+## Google Play Store Listing
+
+| File | Used by | Notes |
+| --- | --- | --- |
+| `assets/play-store/icon-512.png` | Google Play app icon | 512×512 RGB PNG derived from `assets/icon.png`. |
+| `assets/play-store/feature-graphic.png` | Google Play feature graphic | 1024×500 PNG using the bundled Ha Long Bay photo. |
+| `assets/play-store/screenshot-01-guide.png` | Google Play phone screenshot | 1080×1920 PNG composed from an app onboarding screenshot. |
+| `assets/play-store/screenshot-02-discover.png` | Google Play phone screenshot | 1080×1920 PNG composed from the Home screen. |
+| `assets/play-store/screenshot-03-food.png` | Google Play phone screenshot | 1080×1920 PNG composed from the Food screen. |
+| `assets/play-store/screenshot-04-ai.png` | Google Play phone screenshot | 1080×1920 PNG composed from the AI itinerary screen. |
+
+Raw browser captures used to compose the store screenshots live in `assets/play-store/raw/`.
 
 ## Photos
 

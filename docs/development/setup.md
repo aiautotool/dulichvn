@@ -9,7 +9,7 @@ This page walks through getting the app running on web, iOS, and Android locally
 - For iOS: macOS with Xcode and CocoaPods.
 - For Android: Android Studio + an Android emulator or a physical device.
 - A Cloudflare account (only required for deployment or for testing the email endpoint).
-- A Google Cloud project with OAuth clients for web, Android, and iOS (only required for testing Google sign-in).
+- A Firebase/Google Cloud project with Google sign-in enabled. iOS uses `GoogleService-Info.plist`; web sign-in is approved by QR from the mobile app.
 
 ## Install
 
@@ -34,12 +34,11 @@ Set the values you need:
 | Key | Required for |
 | --- | --- |
 | `EXPO_PUBLIC_GA_MEASUREMENT_ID` | Web analytics (must start with `G-`) |
-| `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` | Google sign-in on web |
-| `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` | Google sign-in on Android |
-| `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` | Google sign-in on iOS |
+| `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` | Optional Firebase server/web client for native Google Sign-In |
+| `EXPO_PUBLIC_VINAGO_API_BASE_URL` | QR web login when a physical phone needs to reach the Worker |
 | `EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT` | Cloudflare Worker email (defaults to `/api/itinerary-email` if omitted) |
 
-If you skip the OAuth env vars, the app falls back to the Firebase client IDs embedded in `App.tsx` and the `google-services.json` shipped in the repo. Those are useful for development; see [Google Auth](../integrations/google-auth.md) for the production checklist.
+iOS does not use `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`. It reads `CLIENT_ID` and `REVERSED_CLIENT_ID` from `GoogleService-Info.plist` after `npx expo prebuild --platform ios`.
 
 ## Run
 
@@ -72,7 +71,7 @@ The answer is computed locally by `buildAiAnswer` in `App.tsx`. There is no netw
 
 ## Try the email flow
 
-1. Sign in with Google (the OAuth client must be configured for the redirect URI Metro prints, e.g. `http://localhost:8081/oauthredirect`).
+1. On a mobile build, sign in with Google through Firebase Auth. On web, open the Account tab and scan its QR code from the signed-in mobile app.
 2. Open the AI tab and tap "Generate itinerary".
 3. Tap "Email confirmation". If `EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT` is unset, the OS email composer opens. If it is set to a URL you can reach, the request is sent to that URL.
 4. For end-to-end testing of the Worker, see [Cloudflare Worker](../integrations/cloudflare-worker.md) and the [Wrangler dev docs](https://developers.cloudflare.com/workers/wrangler/commands/#dev).
@@ -104,7 +103,6 @@ You can also use the in-app "Language" button in the top bar to reset just the p
 | Symptom | Fix |
 | --- | --- |
 | Metro complains about TypeScript errors | `npm run typecheck` to see them; the dev server will still run unless errors are fatal |
-| `expo-web-browser` errors on iOS simulator | Sign-in requires a real device or a custom URL scheme registered in the simulator's `Info.plist`. The bundled `app.json` declares `scheme: vinagoplus`; prebuild is required |
-| Google sign-in returns `redirect_uri_mismatch` | Add `http://localhost:8081/oauthredirect` (dev) or your production URL to the OAuth client |
+| Google sign-in opens nothing on iOS | Rebuild after prebuild so `ios/Vinago/GoogleService-Info.plist` and the reversed client URL scheme are inside the native app |
 | Analytics events do not show up on the dashboard | Web only fires through `gtag` when `EXPO_PUBLIC_GA_MEASUREMENT_ID` starts with `G-`; on native or unconfigured web, events are queued to AsyncStorage (see [Google Analytics](../integrations/google-analytics.md)) |
 | Native build fails with `google-services.json` package mismatch | The bundled file is for `com.vinago.dev`; see [Native Builds](./native-builds.md) for the steps to fix this |

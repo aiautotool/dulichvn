@@ -1,0 +1,6 @@
+for_platform :android do
+  package_name(ENV.fetch("ANDROID_PACKAGE_NAME", "com.vinago.dev"))
+
+  json_key = ENV["GOOGLE_PLAY_JSON_KEY_FILE"] || ENV["SUPPLY_JSON_KEY"]
+  json_key_file(json_key) if json_key && !json_key.empty?
+end

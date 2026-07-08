@@ -10,7 +10,7 @@ Welcome to the **Vinago+** project documentation. This folder is the canonical, 
 - **Version:** 1.0.0
 - **Scheme (deep link):** `vinagoplus`
 - **Platforms:** Expo SDK 56 web (Metro), iOS, Android
-- **Stack:** React Native (Expo), TypeScript, AsyncStorage, `expo-auth-session` (Google), `expo-mail-composer`, GA4, Cloudflare Workers + static assets, Resend
+- **Stack:** React Native (Expo), TypeScript, AsyncStorage, native Google Sign-In + Firebase Auth, `expo-mail-composer`, GA4, Cloudflare Workers + static assets, Resend
 - **Primary domain:** `vinago.aiautotool.com` (proxied via Cloudflare)
 - **GA4 property:** `vinago-e7476` (property `542368554`, stream `15118007638`)
 - **Design tokens:** red/white palette, 4-tab bottom nav, 220 i18n keys, 2 locales (EN/VI)
@@ -60,7 +60,7 @@ docs/
 │   └── language-support.md         # language picker screen
 │
 ├── integrations/
-│   ├── google-auth.md              # expo-auth-session + Google identity
+│   ├── google-auth.md              # native Google Sign-In + Firebase Auth + QR web login
 │   ├── google-analytics.md         # gtag + AsyncStorage event queue
 │   ├── itinerary-email.md         # Resend via Cloudflare Worker
 │   └── cloudflare-worker.md        # Worker runtime, types, secrets

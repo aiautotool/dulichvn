@@ -1,9 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as AuthSession from 'expo-auth-session';
-import * as Google from 'expo-auth-session/providers/google';
 import * as MailComposer from 'expo-mail-composer';
+import * as Speech from 'expo-speech';
 import { StatusBar } from 'expo-status-bar';
-import * as WebBrowser from 'expo-web-browser';
+import {
+  loadTravelPlacesFromDatabase,
+  travelPlaceSeeds,
+  type PlaceImageKey,
+  type StoredTravelPlace,
+} from './src/data/placeStore';
 import {
   ArrowLeft,
   Bell,
@@ -17,6 +21,7 @@ import {
   Clock,
   Coffee,
   Compass,
+  DollarSign,
   Download,
   FileText,
   Filter,
@@ -34,12 +39,15 @@ import {
   Phone,
   Plane,
   Plus,
+  QrCode,
+  RefreshCw,
   Search as SearchIcon,
   Send,
   Settings as SettingsIcon,
   Share2,
   ShieldAlert,
   ShoppingBag,
+  ScanLine,
   Sparkles,
   Star,
   Trash2,
@@ -54,13 +62,14 @@ import {
   X,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  ActivityIndicator,
   Image,
   ImageSourcePropType,
   Linking,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,
@@ -69,15 +78,94 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-
-WebBrowser.maybeCompleteAuthSession();
+import { WebView } from 'react-native-webview';
+import { MockLiveCallRepository } from './src/features/live-preview/repositories/MockLiveCallRepository';
+import { MockLivePreviewRepository } from './src/features/live-preview/repositories/MockLivePreviewRepository';
+import { MockPaymentEscrowRepository } from './src/features/live-preview/repositories/MockPaymentEscrowRepository';
+import { LiveCallService } from './src/features/live-preview/services/LiveCallService';
+import { LivePreviewService } from './src/features/live-preview/services/LivePreviewService';
+import { PaymentEscrowService } from './src/features/live-preview/services/PaymentEscrowService';
+import {
+  LiveCallRoomScreen,
+} from './src/features/live-preview/screens/LiveCallRoomScreen';
+import {
+  LivePreviewCompletionScreen,
+} from './src/features/live-preview/screens/LivePreviewCompletionScreen';
+import {
+  LivePreviewRequestScreen,
+  type LivePreviewPlaceSummary,
+} from './src/features/live-preview/screens/LivePreviewRequestScreen';
+import {
+  LivePreviewWaitingScreen,
+} from './src/features/live-preview/screens/LivePreviewWaitingScreen';
+import {
+  LivePreviewStatus,
+  type LivePreviewActor,
+  type LivePreviewActorRole,
+  type LivePreviewRequest,
+} from './src/features/live-preview/types';
+import { MockLocalHelperRepository } from './src/features/local-helper/repositories/MockLocalHelperRepository';
+import { LocalHelperService } from './src/features/local-helper/services/LocalHelperService';
+import {
+  LocalHelperEarningsScreen,
+} from './src/features/local-helper/screens/LocalHelperEarningsScreen';
+import {
+  LocalHelperJobDetailScreen,
+} from './src/features/local-helper/screens/LocalHelperJobDetailScreen';
+import {
+  LocalHelperJobsScreen,
+} from './src/features/local-helper/screens/LocalHelperJobsScreen';
+import {
+  LocalHelperOnboardingScreen,
+} from './src/features/local-helper/screens/LocalHelperOnboardingScreen';
+import type {
+  LocalHelperEarning,
+  LocalHelperJob,
+  LocalHelperProfile,
+  SaveLocalHelperProfileInput,
+} from './src/features/local-helper/types';
+import { QrLoginScanner } from './src/features/account/components/QrLoginScanner';
+import {
+  approveQrLoginSession,
+  createQrLoginSession,
+  parseQrLoginPayload,
+  pollQrLoginSession,
+  verifyQrWebSession,
+  type QrLoginPollResult,
+  type QrLoginSession,
+  type QrLoginUser,
+} from './src/features/account/services/qrLogin';
+import { qrLoginDataUrl } from './src/features/account/services/qrImage';
+import { requestQrScannerPermission } from './src/features/account/services/qrScanner';
+import {
+  accountAuthErrorMessage,
+  configureAccountAuth,
+  getAccountIdToken,
+  observeAccountAuth,
+  signInWithGoogleAccount,
+  signOutAccount,
+  type AccountAuthUser,
+} from './src/features/account/services/firebaseAccount';
+import { AppLanguageProvider, translateStaticText, useTranslatedData } from './src/lib/translation';
+import type { TranslationLanguageCode } from './src/lib/translation/language';
 
 /* ============================================================
  *  Domain types
  * ============================================================ */
 
-type Locale = 'en' | 'vi';
-type Language = 'English' | 'Vietnamese';
+type BaseLocale = 'en' | 'vi';
+type Locale = TranslationLanguageCode;
+type Language =
+  | 'English'
+  | 'Vietnamese'
+  | 'Korean'
+  | 'Japanese'
+  | 'Chinese'
+  | 'Chinese Traditional'
+  | 'Thai'
+  | 'French'
+  | 'German'
+  | 'Spanish';
 type Purpose =
   | 'Travel'
   | 'Sightseeing'
@@ -94,6 +182,15 @@ type City =
   | 'Hạ Long'
   | 'Nha Trang'
   | 'Đà Lạt'
+  | 'Ninh Bình'
+  | 'Sa Pa'
+  | 'Quảng Bình'
+  | 'Phú Quốc'
+  | 'Mũi Né'
+  | 'Cần Thơ'
+  | 'Quy Nhơn'
+  | 'Hà Giang'
+  | 'Vũng Tàu'
   | 'Other';
 
 type TabId =
@@ -107,6 +204,7 @@ type TabId =
   | 'emergency'
   | 'ai'
   | 'itinerary_preview'
+  | 'itinerary_email'
   | 'itinerary_pdf'
   | 'favorites'
   | 'history'
@@ -116,7 +214,15 @@ type TabId =
   | 'language'
   | 'filter'
   | 'map'
-  | 'offline';
+  | 'offline'
+  | 'live_preview_request'
+  | 'live_preview_waiting'
+  | 'live_call_room'
+  | 'live_preview_completion'
+  | 'local_helper_onboarding'
+  | 'local_helper_jobs'
+  | 'local_helper_job_detail'
+  | 'local_helper_earnings';
 
 type SavedItemType = 'place' | 'food' | 'phrase' | 'culture';
 
@@ -124,6 +230,7 @@ type UserProfile = {
   language: Language;
   purpose: Purpose;
   currentCity: City;
+  selectedCities?: City[];
   tripDays: number;
 };
 
@@ -255,31 +362,44 @@ const SETTINGS_VERSION = '1.0.0';
 
 const PROFILE_KEY = 'vinago-plus-profile';
 const FAVORITES_KEY = 'vinago-plus-favorites';
-const AUTH_SESSION_KEY = 'vinago-plus-auth-session';
+const QR_WEB_SESSION_KEY = 'vinago-plus-web-qr-session';
 const ACTIVITY_HISTORY_KEY = 'vinago-plus-activity-history';
 const ANALYTICS_QUEUE_KEY = 'vinago-plus-analytics-queue';
 const RECENT_SEARCHES_KEY = 'vinago-plus-recent-searches';
 const SETTINGS_KEY = 'vinago-plus-settings';
+const LEGACY_AUTH_SESSION_KEY = 'vinago-plus-auth-session';
 
 const ACTIVITY_HISTORY_LIMIT = 80;
 const RECENT_SEARCHES_LIMIT = 8;
-const APP_SCHEME = 'vinagoplus';
-
-const FIREBASE_ANDROID_CLIENT_ID =
-  '959396812028-kebdshs109pum50s7of7eqe27odlgh3l.apps.googleusercontent.com';
 const FIREBASE_WEB_CLIENT_ID =
   '959396812028-5uedsvgcclv8ngjs97enll5tlmld45oa.apps.googleusercontent.com';
 
-const googleOAuthConfig = {
-  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? FIREBASE_WEB_CLIENT_ID,
-  androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? FIREBASE_ANDROID_CLIENT_ID,
-  iosClientId:
-    process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ??
-    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ??
-    FIREBASE_WEB_CLIENT_ID,
+const googleAccountAuthConfig = {
+  // iOS reads CLIENT_ID from GoogleService-Info.plist. The web client ID here is
+  // the Firebase server client, not the browser login flow.
+  googleServicePlistPath: 'GoogleService-Info',
+  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim() || FIREBASE_WEB_CLIENT_ID,
 };
 
+configureAccountAuth(googleAccountAuthConfig);
+
 const itineraryEmailEndpoint = process.env.EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT;
+const privacyPolicyUrl =
+  process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL ?? 'https://vinago.aiautotool.com/privacy-policy';
+
+const livePreviewRepository = new MockLivePreviewRepository();
+const liveCallRepository = new MockLiveCallRepository();
+const paymentEscrowRepository = new MockPaymentEscrowRepository();
+const localHelperRepository = new MockLocalHelperRepository(livePreviewRepository);
+const liveCallService = new LiveCallService(liveCallRepository);
+const paymentEscrowService = new PaymentEscrowService(livePreviewRepository, paymentEscrowRepository);
+const livePreviewService = new LivePreviewService(
+  livePreviewRepository,
+  localHelperRepository,
+  paymentEscrowService,
+  liveCallService,
+);
+const localHelperService = new LocalHelperService(localHelperRepository, livePreviewService);
 
 const analyticsConfig = {
   propertyName: 'vinago-e7476',
@@ -330,14 +450,80 @@ type AnalyticsPayload = {
   timestamp: string;
 };
 
-const languages: Language[] = ['English', 'Vietnamese'];
+const languages: Language[] = [
+  'Vietnamese',
+  'English',
+  'Korean',
+  'Japanese',
+  'Chinese',
+  'Chinese Traditional',
+  'Thai',
+  'French',
+  'German',
+  'Spanish',
+];
 const localeByLanguage: Record<Language, Locale> = {
+  'Chinese Traditional': 'zh-TW',
+  Chinese: 'zh-CN',
   English: 'en',
+  French: 'fr',
+  German: 'de',
+  Japanese: 'ja',
+  Korean: 'ko',
+  Spanish: 'es',
+  Thai: 'th',
   Vietnamese: 'vi',
 };
 const languageLabels: Record<Language, string> = {
+  'Chinese Traditional': '繁體中文',
+  Chinese: '中文',
   English: 'English',
+  French: 'Français',
+  German: 'Deutsch',
+  Japanese: '日本語',
+  Korean: '한국어',
+  Spanish: 'Español',
+  Thai: 'ไทย',
   Vietnamese: 'Tiếng Việt',
+};
+
+const languageNativeNames: Record<Language, string> = {
+  'Chinese Traditional': '繁體中文',
+  Chinese: '简体中文',
+  English: 'English',
+  French: 'Français',
+  German: 'Deutsch',
+  Japanese: '日本語',
+  Korean: '한국어',
+  Spanish: 'Español',
+  Thai: 'ไทย',
+  Vietnamese: 'Tiếng Việt',
+};
+
+const languageSecondaryNames: Record<Language, string> = {
+  'Chinese Traditional': 'Chinese Traditional',
+  Chinese: 'Chinese Simplified',
+  English: 'English',
+  French: 'French',
+  German: 'German',
+  Japanese: 'Japanese',
+  Korean: 'Korean',
+  Spanish: 'Spanish',
+  Thai: 'Thai',
+  Vietnamese: 'Vietnamese',
+};
+
+const languageFlags: Record<Language, string> = {
+  'Chinese Traditional': '🇹🇼',
+  Chinese: '🇨🇳',
+  English: '🇬🇧',
+  French: '🇫🇷',
+  German: '🇩🇪',
+  Japanese: '🇯🇵',
+  Korean: '🇰🇷',
+  Spanish: '🇪🇸',
+  Thai: '🇹🇭',
+  Vietnamese: '🇻🇳',
 };
 
 const purposes: Purpose[] = [
@@ -369,6 +555,15 @@ const cities: City[] = [
   'Hạ Long',
   'Nha Trang',
   'Đà Lạt',
+  'Ninh Bình',
+  'Sa Pa',
+  'Quảng Bình',
+  'Phú Quốc',
+  'Mũi Né',
+  'Cần Thơ',
+  'Quy Nhơn',
+  'Hà Giang',
+  'Vũng Tàu',
   'Other',
 ];
 
@@ -378,8 +573,18 @@ const onboardingCities: City[] = [
   'Đà Nẵng',
   'Hội An',
   'Huế',
+  'Hạ Long',
   'Nha Trang',
   'Đà Lạt',
+  'Ninh Bình',
+  'Sa Pa',
+  'Quảng Bình',
+  'Phú Quốc',
+  'Mũi Né',
+  'Cần Thơ',
+  'Quy Nhơn',
+  'Hà Giang',
+  'Vũng Tàu',
   'Other',
 ];
 
@@ -387,6 +592,7 @@ const defaultProfile: UserProfile = {
   language: 'English',
   purpose: 'Travel',
   currentCity: 'TP. Hồ Chí Minh',
+  selectedCities: ['TP. Hồ Chí Minh'],
   tripDays: 3,
 };
 
@@ -418,7 +624,7 @@ const translations = {
     'onboarding.chooseLanguage': 'Choose your language',
     'onboarding.continue': 'Continue',
     'onboarding.purposeTitle': "What's the purpose of your trip?",
-    'onboarding.cityTitle': 'Which city will you visit?',
+    'onboarding.cityTitle': 'Which cities will you visit?',
     'onboarding.daysTitle': 'How many days are you staying?',
     'onboarding.tripDays': 'days',
     'onboarding.start': 'Start exploring',
@@ -426,6 +632,7 @@ const translations = {
     /* Bottom nav */
     'nav.explore': 'Explore',
     'nav.favorites': 'Favorites',
+    'nav.ai': 'Chat',
     'nav.history': 'History',
     'nav.account': 'Account',
 
@@ -449,18 +656,33 @@ const translations = {
     /* Home */
     'home.greeting': 'Hello',
     'home.discoverTitle': 'Discover Vietnam',
+    'home.catalogTitle': 'Vietnam guide',
+    'home.catalogPlaces': 'places',
+    'home.catalogCities': 'cities',
+    'home.catalogSaved': 'ready offline',
     'home.searchPlaceholder': 'Search places, food, phrases...',
     'home.quick.all': 'All',
     'home.quick.food': 'Food',
-    'home.quick.stay': 'Stay',
-    'home.quick.transport': 'Transport',
+    'home.quick.stay': 'Nature',
+    'home.quick.transport': 'History',
     'home.popularTitle': 'Popular destinations',
     'home.popularViewAll': 'View all',
     'home.experiencesTitle': 'Travel experiences you may enjoy',
     'home.nearbyTitle': 'Travel experiences you may enjoy',
+    'home.selectedCities': 'Selected cities',
+    'home.toolsTitle': 'Travel tools',
+    'home.tool.explore': 'Places',
+    'home.tool.food': 'Food',
+    'home.tool.culture': 'Culture',
+    'home.tool.phrases': 'Phrases',
+    'home.tool.emergency': 'Emergency',
+    'home.tool.ai': 'AI plan',
+    'home.tool.map': 'Map',
+    'home.tool.offline': 'Offline',
 
     /* Explore / Place */
     'explore.title': 'Destinations',
+    'explore.countLabel': 'places available',
     'explore.allCities': 'All',
     'explore.viewAll': 'View all',
     'explore.noResults': 'No places match your filters',
@@ -533,6 +755,7 @@ const translations = {
     'ai.sendEmail': 'Send email',
     'ai.emailFormTitle': 'Send itinerary by email',
     'ai.emailFormSubtitle': 'The email will be sent to the address of your Google account.',
+    'ai.emailIntro': 'Send your itinerary to yourself or a travel partner.',
     'ai.emailRecipient': 'Recipient email',
     'ai.emailSubject': 'Email subject',
     'ai.emailBody': 'Email content',
@@ -546,6 +769,7 @@ const translations = {
     'ai.emailUnavailable': 'No email client is available on this device.',
     'ai.emailSent': 'Itinerary email sent successfully.',
     'ai.emailFailed': 'Could not send the email. Please try again later.',
+    'common.askAi': 'Ask AI',
 
     /* Favorites */
     'favorites.title': 'Favorites',
@@ -581,8 +805,24 @@ const translations = {
     'account.notSignedIn.body': 'Sign in with Google to sync your favorites and itinerary emails.',
     'account.signIn': 'Sign in with Google',
     'account.signedInAs': 'Signed in as',
+    'account.verification': 'Verification',
     'account.verified': 'Verified',
     'account.unverified': 'Unverified',
+    'account.qrWebTitle': 'Sign in with the mobile app',
+    'account.qrWebBody': 'Open Vinago+ on your phone, sign in with Google, then scan this QR code.',
+    'account.qrWaiting': 'Waiting for the mobile app to scan...',
+    'account.qrExpired': 'QR login expired. Creating a new code...',
+    'account.qrCreateFailed': 'Could not create a QR login code.',
+    'account.qrCheckFailed': 'Could not check QR login status.',
+    'account.qrRefresh': 'Create a new QR code',
+    'account.qrRefreshing': 'Creating QR...',
+    'account.qrScanWeb': 'Scan web login QR',
+    'account.qrApproving': 'Approving QR...',
+    'account.qrMobileReady': 'Scan the QR code on the web account screen.',
+    'account.qrMobileSignedIn': 'Web login approved. Return to the browser to continue.',
+    'account.qrMobileNeedLogin': 'Sign in with Google on this app before scanning a web login QR.',
+    'account.qrMobileNeedToken': 'Please sign in with Google again before scanning. The saved session is missing a fresh Google token.',
+    'account.qrCameraDenied': 'Camera permission is required to scan the web login QR.',
 
     /* Settings */
     'settings.title': 'Settings',
@@ -635,6 +875,9 @@ const translations = {
     'map.title': 'Map view',
     'map.subtitle': 'Tap a pin to see details.',
     'map.openExternal': 'Open in Maps',
+    'map.loading': 'Loading OpenStreetMap...',
+    'map.unavailable': 'Could not load OpenStreetMap. Open the location externally.',
+    'map.attribution': '© OpenStreetMap contributors',
 
     /* Auth */
     'auth.signIn': 'Continue with Google',
@@ -655,13 +898,14 @@ const translations = {
     'onboarding.chooseLanguage': 'Chọn ngôn ngữ của bạn',
     'onboarding.continue': 'Tiếp tục',
     'onboarding.purposeTitle': 'Mục đích chuyến đi của bạn là gì?',
-    'onboarding.cityTitle': 'Bạn sẽ đến thăm thành phố nào?',
+    'onboarding.cityTitle': 'Bạn sẽ đến thăm những thành phố nào?',
     'onboarding.daysTitle': 'Bạn dự định ở bao nhiêu ngày?',
     'onboarding.tripDays': 'ngày / days',
     'onboarding.start': 'Bắt đầu',
 
     'nav.explore': 'Khám phá',
     'nav.favorites': 'Yêu thích',
+    'nav.ai': 'Chat',
     'nav.history': 'Lịch sử',
     'nav.account': 'Tài khoản',
 
@@ -682,17 +926,32 @@ const translations = {
 
     'home.greeting': 'Xin chào',
     'home.discoverTitle': 'Khám phá Việt Nam',
+    'home.catalogTitle': 'Cẩm nang Việt Nam',
+    'home.catalogPlaces': 'địa điểm',
+    'home.catalogCities': 'thành phố',
+    'home.catalogSaved': 'sẵn sàng offline',
     'home.searchPlaceholder': 'Tìm địa điểm, món ăn, câu giao tiếp...',
     'home.quick.all': 'Tất cả',
     'home.quick.food': 'Món ăn',
-    'home.quick.stay': 'Lưu trú',
-    'home.quick.transport': 'Di chuyển',
+    'home.quick.stay': 'Thiên nhiên',
+    'home.quick.transport': 'Lịch sử',
     'home.popularTitle': 'Địa điểm nổi bật',
     'home.popularViewAll': 'Xem tất cả',
     'home.experiencesTitle': 'Trải nghiệm không thể bỏ lỡ',
     'home.nearbyTitle': 'Trải nghiệm không thể bỏ lỡ',
+    'home.selectedCities': 'Thành phố đã chọn',
+    'home.toolsTitle': 'Công cụ du lịch',
+    'home.tool.explore': 'Địa điểm',
+    'home.tool.food': 'Món ăn',
+    'home.tool.culture': 'Văn hóa',
+    'home.tool.phrases': 'Câu giao tiếp',
+    'home.tool.emergency': 'Khẩn cấp',
+    'home.tool.ai': 'AI lịch trình',
+    'home.tool.map': 'Bản đồ',
+    'home.tool.offline': 'Ngoại tuyến',
 
     'explore.title': 'Địa điểm',
+    'explore.countLabel': 'địa điểm phù hợp',
     'explore.allCities': 'Tất cả',
     'explore.viewAll': 'Xem tất cả',
     'explore.noResults': 'Không có địa điểm phù hợp',
@@ -761,6 +1020,7 @@ const translations = {
     'ai.sendEmail': 'Gửi email',
     'ai.emailFormTitle': 'Gửi lịch trình qua email',
     'ai.emailFormSubtitle': 'Email sẽ được gửi đến địa chỉ tài khoản Google của bạn.',
+    'ai.emailIntro': 'Gửi lịch trình cho bạn hoặc người đồng hành.',
     'ai.emailRecipient': 'Email người nhận',
     'ai.emailSubject': 'Tiêu đề email',
     'ai.emailBody': 'Nội dung email',
@@ -774,6 +1034,7 @@ const translations = {
     'ai.emailUnavailable': 'Thiết bị chưa có ứng dụng email khả dụng.',
     'ai.emailSent': 'Đã gửi email lịch trình thành công.',
     'ai.emailFailed': 'Chưa gửi được email. Vui lòng thử lại sau.',
+    'common.askAi': 'Hỏi AI',
 
     'favorites.title': 'Yêu thích',
     'favorites.tabs.all': 'Tất cả',
@@ -806,8 +1067,24 @@ const translations = {
     'account.notSignedIn.body': 'Đăng nhập bằng Google để đồng bộ yêu thích và email lịch trình.',
     'account.signIn': 'Đăng nhập với Google',
     'account.signedInAs': 'Đã đăng nhập',
+    'account.verification': 'Xác minh',
     'account.verified': 'Đã xác minh',
     'account.unverified': 'Chưa xác minh',
+    'account.qrWebTitle': 'Đăng nhập bằng app mobile',
+    'account.qrWebBody': 'Mở Vinago+ trên điện thoại, đăng nhập Google, rồi quét mã QR này.',
+    'account.qrWaiting': 'Đang chờ app mobile quét mã QR...',
+    'account.qrExpired': 'Mã QR đã hết hạn. Đang tạo mã mới...',
+    'account.qrCreateFailed': 'Chưa thể tạo mã QR đăng nhập.',
+    'account.qrCheckFailed': 'Chưa thể kiểm tra trạng thái đăng nhập QR.',
+    'account.qrRefresh': 'Tạo mã QR mới',
+    'account.qrRefreshing': 'Đang tạo QR...',
+    'account.qrScanWeb': 'Quét QR đăng nhập web',
+    'account.qrApproving': 'Đang xác nhận QR...',
+    'account.qrMobileReady': 'Quét mã QR trên màn hình tài khoản web.',
+    'account.qrMobileSignedIn': 'Đã xác nhận đăng nhập web. Quay lại trình duyệt để tiếp tục.',
+    'account.qrMobileNeedLogin': 'Hãy đăng nhập Google trên app trước khi quét QR đăng nhập web.',
+    'account.qrMobileNeedToken': 'Vui lòng đăng nhập Google lại trước khi quét. Phiên đã lưu không còn Google token mới.',
+    'account.qrCameraDenied': 'Cần quyền camera để quét QR đăng nhập web.',
 
     'settings.title': 'Cài đặt',
     'settings.notifications.title': 'Thông báo',
@@ -854,12 +1131,15 @@ const translations = {
     'map.title': 'Chế độ bản đồ',
     'map.subtitle': 'Nhấn vào ghim để xem chi tiết.',
     'map.openExternal': 'Mở trong bản đồ',
+    'map.loading': 'Đang tải OpenStreetMap...',
+    'map.unavailable': 'Chưa tải được OpenStreetMap. Hãy mở vị trí bằng bản đồ ngoài.',
+    'map.attribution': '© OpenStreetMap contributors',
 
     'auth.signIn': 'Tiếp tục với Google',
     'auth.signingIn': 'Đang mở Google...',
     'auth.signOut': 'Đăng xuất',
   },
-} as Record<Locale, Record<string, string>>;
+} as Record<BaseLocale, Record<string, string>>;
 
 type TranslationKey = keyof typeof translations.en;
 type Translations = Record<string, string>;
@@ -869,291 +1149,64 @@ function getLocale(language: Language): Locale {
 }
 
 function translate(locale: Locale, key: TranslationKey): string {
-  const dictionary = translations[locale] as Record<string, string | undefined>;
-  return dictionary[key] ?? translations.en[key] ?? (key as string);
+  const baseDictionary = locale === 'vi' || locale === 'en' ? translations[locale] : undefined;
+  const direct = baseDictionary?.[key];
+  if (direct) return direct;
+
+  const vietnameseSource = translations.vi[key];
+  if (vietnameseSource) {
+    return translateStaticText(vietnameseSource, locale, translations.en[key]);
+  }
+
+  return translations.en[key] ?? (key as string);
 }
 
 /* ============================================================
  *  Static catalogs
  * ============================================================ */
 
-const places: Place[] = [
-  {
-    id: 'ha_long_bay',
-    name: 'Ha Long Bay',
-    city: 'Hạ Long',
-    category: 'Bay',
-    description:
-      'Vịnh Hạ Long — Di sản thiên nhiên thế giới UNESCO với hàng nghìn đảo đá vôi, hang động và làng chài nổi tiếng.',
-    history:
-      'Vịnh Hạ Long là một trong những địa danh tự nhiên nổi tiếng nhất Việt Nam, được UNESCO công nhận là Di sản Thiên nhiên Thế giới.',
-    bestTime: 'Tháng 4 - Tháng 10',
-    ticketPrice: 'Bao gồm vé tham quan: 1 - 2 triệu',
-    openHours: 'Theo lịch tàu',
-    lat: 20.91,
-    lng: 107.183,
-    tags: ['Di sản UNESCO', 'Đã lưu'],
-    whyGo: 'Là cảnh quan biển đặc trưng của Việt Nam, lý tưởng cho du thuyền qua đêm hoặc trong ngày.',
-    travelTip: 'Nên chọn tuyến Lan Hạ thay vì tuyến Hạ Long chính nếu muốn yên tĩnh hơn.',
-    image: require('./assets/photos/ha-long-bay.jpg'),
-  },
-  {
-    id: 'pho_co_hanoi',
-    name: 'Hà Nội Phố Cổ',
-    city: 'Hà Nội',
-    category: 'Khu phố',
-    description:
-      'Phố cổ Hà Nội với 36 phố phường, ẩm thực đường phố và các cửa hàng thủ công truyền thống.',
-    history: 'Khu phố cổ hình thành từ thế kỷ 11, gắn liền với các phường nghề truyền thống.',
-    bestTime: 'Sáng sớm hoặc chiều tối',
-    ticketPrice: 'Miễn phí',
-    openHours: 'Cả ngày',
-    lat: 21.035,
-    lng: 105.852,
-    tags: ['Ẩm thực', 'Đi bộ', 'Lịch sử'],
-    whyGo: 'Cách trực tiếp nhất để cảm nhận nhịp sống thường ngày của Hà Nội.',
-    travelTip: 'Dùng Hồ Gươm làm mốc định hướng vì các ngõ có thể gây rối.',
-    image: require('./assets/photos/hoan-kiem-lake.jpg'),
-  },
-  {
-    id: 'hoan_kiem_lake',
-    name: 'Hồ Gươm',
-    city: 'Hà Nội',
-    category: 'Hồ',
-    description: 'Trái tim của Hà Nội với Tháp Rùa, đền Ngọc Sơn và không gian đi bộ quanh hồ.',
-    history: 'Gắn liền với truyền thuyết Lê Lợi trả gươm thần, là biểu tượng lịch sử của thủ đô.',
-    bestTime: 'Sáng sớm hoặc chiều tối',
-    ticketPrice: 'Miễn phí',
-    openHours: 'Cả ngày',
-    lat: 21.028,
-    lng: 105.852,
-    tags: ['Lịch sử', 'Đi bộ', 'Phố cổ'],
-    whyGo: 'Điểm khởi đầu thuận tiện nhất để hiểu về trung tâm Hà Nội.',
-    travelTip: 'Đi bộ quanh hồ theo chiều kim đồng hồ và thử cà phê trứng gần đó.',
-    image: require('./assets/photos/hoan-kiem-lake.jpg'),
-  },
-  {
-    id: 'hoi_an',
-    name: 'Hội An',
-    city: 'Hội An',
-    category: 'Di sản',
-    description: 'Phố cổ Hội An với đèn lồng, kiến trúc Pháp - Hoa - Việt và ẩm thực đặc sắc.',
-    history: 'Thương cảng quốc tế từ thế kỷ 16-17, nay là Di sản UNESCO.',
-    bestTime: 'Chiều tối khi đèn lồng lên',
-    ticketPrice: 'Vé vào phố cổ',
-    openHours: 'Cả ngày',
-    lat: 15.8801,
-    lng: 108.338,
-    tags: ['Di sản UNESCO', 'Đèn lồng', 'Ẩm thực'],
-    whyGo: 'Phố cổ ven sông đẹp nhất Việt Nam, đặc biệt về đêm.',
-    travelTip: 'Mua vé tham quan các di tích trước 17h để tiết kiệm.',
-    image: require('./assets/photos/hoi-an-ancient-town.jpg'),
-  },
-  {
-    id: 'da_nang',
-    name: 'Đà Nẵng',
-    city: 'Đà Nẵng',
-    category: 'Thành phố biển',
-    description: 'Thành phố biển hiện đại với Bà Nà Hills, Ngũ Hành Sơn và bãi biển Mỹ Khê.',
-    history: 'Từng là thương cảng nhỏ, nay là đô thị lớn nhất miền Trung.',
-    bestTime: 'Tháng 3 - Tháng 8',
-    ticketPrice: 'Miễn phí (vé Bà Nà riêng)',
-    openHours: 'Cả ngày',
-    lat: 16.054,
-    lng: 108.202,
-    tags: ['Biển', 'Hiện đại', 'Bà Nà'],
-    whyGo: 'Kết hợp biển, núi và đô thị trong một thành phố.',
-    travelTip: 'Thuê xe máy để khám phá Ngũ Hành Sơn và bãi biển.',
-    image: require('./assets/photos/my-khe-beach.jpg'),
-  },
-  {
-    id: 'ba_na_hills',
-    name: 'Bà Nà Hills',
-    city: 'Đà Nẵng',
-    category: 'Khu du lịch',
-    description: 'Khu nghỉ dưỡng trên núi với Cầu Vàng nổi tiếng, làng Pháp và khí hậu mát mẻ.',
-    history: 'Được người Pháp phát hiện từ đầu thế kỷ 20, nay là điểm đến hàng đầu miền Trung.',
-    bestTime: 'Sáng sớm để tránh đông',
-    ticketPrice: '900.000 VND',
-    openHours: '8:00 - 22:00',
-    lat: 15.997,
-    lng: 107.987,
-    tags: ['Cầu Vàng', 'Núi', 'Làng Pháp'],
-    whyGo: 'Trải nghiệm bốn mùa trong một ngày và Cầu Vàng biểu tượng.',
-    travelTip: 'Đi cáp treo sớm để tránh xếp hàng.',
-    image: require('./assets/photos/my-khe-beach.jpg'),
-  },
-  {
-    id: 'hue',
-    name: 'Huế',
-    city: 'Huế',
-    category: 'Di sản',
-    description: 'Cố đô với Hoàng thành, lăng tẩm vua Nguyễn và sông Hương thơ mộng.',
-    history: 'Kinh đô triều Nguyễn từ 1802 - 1945, là Di sản UNESCO.',
-    bestTime: 'Sáng sớm',
-    ticketPrice: 'Vé vào Hoàng thành',
-    openHours: '7:00 - 17:30',
-    lat: 16.469,
-    lng: 107.578,
-    tags: ['Di sản UNESCO', 'Hoàng gia', 'Lịch sử'],
-    whyGo: 'Cần thiết để hiểu về Việt Nam hoàng gia và bản sắc miền Trung.',
-    travelTip: 'Nên thuê hướng dẫn viên vì quần thể rất rộng.',
-    image: require('./assets/photos/hue-imperial-city.jpg'),
-  },
-  {
-    id: 'phu_quoc',
-    name: 'Phú Quốc',
-    city: 'TP. Hồ Chí Minh',
-    category: 'Đảo',
-    description: 'Đảo ngọc với bãi biển cát trắng, nước biển trong xanh và hoàng hôn đẹp nhất Việt Nam.',
-    history: 'Đảo lớn nhất Việt Nam, thuộc tỉnh Kiên Giang.',
-    bestTime: 'Tháng 11 - Tháng 4',
-    ticketPrice: 'Miễn phí (vé tàu riêng)',
-    openHours: 'Cả ngày',
-    lat: 10.289,
-    lng: 103.984,
-    tags: ['Biển', 'Đảo', 'Hoàng hôn'],
-    whyGo: 'Hoàng hôn đẹp nhất Việt Nam và resort đẳng cấp quốc tế.',
-    travelTip: 'Đặt tàu trước vào mùa cao điểm.',
-    image: require('./assets/photos/phu-quoc-beach.jpg'),
-  },
-  {
-    id: 'ben_thanh',
-    name: 'Chợ Bến Thành',
-    city: 'TP. Hồ Chí Minh',
-    category: 'Chợ',
-    description: 'Chợ biểu tượng của Sài Gòn với đồ ăn địa phương, quà lưu niệm và vải vóc.',
-    history: 'Tòa nhà chợ hiện tại mở cửa đầu thế kỷ 20, là biểu tượng dân sự của Sài Gòn.',
-    bestTime: 'Sáng cho quầy ăn, chiều cho không khí',
-    ticketPrice: 'Miễn phí',
-    openHours: '7:00 - 19:00',
-    lat: 10.772,
-    lng: 106.698,
-    tags: ['Mua sắm', 'Ẩm thực', 'Văn hóa'],
-    whyGo: 'Cách gọn nhất để xem ẩm thực, vải vóc và quà lưu niệm trong một nơi.',
-    travelTip: 'Mặc cả giá cho quà lưu niệm, không mặc cả ở quán ăn.',
-    image: require('./assets/photos/ben-thanh-market.jpg'),
-  },
-  {
-    id: 'sapa',
-    name: 'Sa Pa',
-    city: 'Hà Nội',
-    category: 'Núi',
-    description: 'Thị trấn cao nguyên với ruộng bậc thang, làng dân tộc và khí hậu mát mẻ.',
-    history: 'Phát triển như một điểm nghỉ dưỡng vùng cao, nay là cửa ngõ vào văn hóa Tây Bắc.',
-    bestTime: 'Tháng 9 (lúa chín) hoặc mùa xuân',
-    ticketPrice: 'Phí làng/trekking khác nhau',
-    openHours: 'Cả ngày',
-    lat: 22.337,
-    lng: 103.844,
-    tags: ['Trekking', 'Ruộng bậc thang', 'Cao nguyên'],
-    whyGo: 'Ruộng bậc thang nổi tiếng nhất Việt Nam và văn hóa dân tộc đa dạng.',
-    travelTip: 'Mang áo ấm vì đêm có thể lạnh.',
-    image: require('./assets/photos/hoan-kiem-lake.jpg'),
-  },
-  {
-    id: 'ninh_binh',
-    name: 'Ninh Bình',
-    city: 'Hà Nội',
-    category: 'Di sản',
-    description: 'Quần thể danh thắng Tràng An, Tam Cốc và Bái Đính với núi đá vôi và sông nước.',
-    history: 'Cố đô Hoa Lư thế kỷ 10, nay là Di sản UNESCO Tràng An.',
-    bestTime: 'Mùa lúa hoặc sáng sớm',
-    ticketPrice: 'Vé đò Tam Cốc',
-    openHours: '7:00 - 17:00',
-    lat: 20.253,
-    lng: 105.918,
-    tags: ['Di sản UNESCO', 'Đò', 'Núi đá vôi'],
-    whyGo: 'Một trong những chuyến đi trong ngày đẹp nhất miền Bắc.',
-    travelTip: 'Mang mũ và nước vì đò phơi nắng.',
-    image: require('./assets/photos/ha-long-bay.jpg'),
-  },
-  {
-    id: 'phong_nha',
-    name: 'Phong Nha - Kẻ Bàng',
-    city: 'TP. Hồ Chí Minh',
-    category: 'Hang động',
-    description: 'Vườn quốc gia với hệ thống hang động lớn nhất thế giới, Di sản UNESCO.',
-    history: 'Được khám phá và bảo tồn từ thập niên 1990.',
-    bestTime: 'Tháng 4 - Tháng 8',
-    ticketPrice: 'Vé vào vườn quốc gia',
-    openHours: '6:00 - 22:00',
-    lat: 17.591,
-    lng: 106.283,
-    tags: ['Hang động', 'Di sản UNESCO', 'Thiên nhiên'],
-    whyGo: 'Hệ thống hang động lớn nhất thế giới với nhiều tour khám phá.',
-    travelTip: 'Đặt tour Sơn Đoòng trước ít nhất 6 tháng.',
-    image: require('./assets/photos/phong-nha-cave.jpg'),
-  },
-  {
-    id: 'mui_ne',
-    name: 'Mũi Né',
-    city: 'TP. Hồ Chí Minh',
-    category: 'Biển',
-    description: 'Đồi cát trắng, đồi cát đỏ, làng chài và resort ven biển.',
-    history: 'Từ làng chài nhỏ thành khu du lịch biển nổi tiếng.',
-    bestTime: 'Bình minh',
-    ticketPrice: 'Phí tham quan',
-    openHours: 'Cả ngày',
-    lat: 10.933,
-    lng: 108.287,
-    tags: ['Đồi cát', 'Bình minh', 'Làng chài'],
-    whyGo: 'Cảnh quan sa mạc hiếm hoi tại Việt Nam.',
-    travelTip: 'Thỏa thuận giá xe jeep/ATV trước khi đi.',
-    image: require('./assets/photos/my-khe-beach.jpg'),
-  },
-  {
-    id: 'nha_trang',
-    name: 'Nha Trang',
-    city: 'Nha Trang',
-    category: 'Biển',
-    description: 'Thành phố biển với bãi cát dài, đảo Hòn Mun và các resort cao cấp.',
-    history: 'Từng là thương cảng Cham Pa, nay là trung tâm du lịch biển.',
-    bestTime: 'Tháng 2 - Tháng 9',
-    ticketPrice: 'Miễn phí (vé tàu riêng)',
-    openHours: 'Cả ngày',
-    lat: 12.238,
-    lng: 109.196,
-    tags: ['Biển', 'Lặn biển', 'Đảo'],
-    whyGo: 'Bãi biển đô thị đẹp nhất Việt Nam với nhiều hoạt động.',
-    travelTip: 'Đi Hòn Mun để lặn san hô.',
-    image: require('./assets/photos/my-khe-beach.jpg'),
-  },
-  {
-    id: 'da_lat',
-    name: 'Đà Lạt',
-    city: 'Đà Lạt',
-    category: 'Cao nguyên',
-    description: 'Thành phố ngàn hoa với khí hậu mát mẻ, biệt thự Pháp và rừng thông.',
-    history: 'Được người Pháp xây dựng từ đầu thế kỷ 20 làm nơi nghỉ dưỡng.',
-    bestTime: 'Mùa khô (12 - 3)',
-    ticketPrice: 'Miễn phí (vé tham quan riêng)',
-    openHours: 'Cả ngày',
-    lat: 11.94,
-    lng: 108.458,
-    tags: ['Hoa', 'Cao nguyên', 'Biệt thự Pháp'],
-    whyGo: 'Khí hậu mát mẻ quanh năm và phong cảnh lãng mạn.',
-    travelTip: 'Mang áo khoác dù đêm lạnh.',
-    image: require('./assets/photos/hoan-kiem-lake.jpg'),
-  },
-  {
-    id: 'can_tho',
-    name: 'Cần Thơ - Chợ nổi Cái Răng',
-    city: 'TP. Hồ Chí Minh',
-    category: 'Chợ nổi',
-    description: 'Chợ nổi lớn nhất ĐBSCL với ghe thuyền bán trái cây và ẩm thực đặc trưng.',
-    history: 'Trung tâm của vùng Đồng bằng sông Cửu Long.',
-    bestTime: 'Sáng sớm (5:00 - 7:00)',
-    ticketPrice: 'Phí tham quan',
-    openHours: 'Sáng sớm',
-    lat: 10.05,
-    lng: 105.78,
-    tags: ['Chợ nổi', 'Sông nước', 'Ẩm thực'],
-    whyGo: 'Trải nghiệm chợ nổi độc đáo trên sông.',
-    travelTip: 'Đi sớm để thấy cảnh mua bán nhộn nhịp nhất.',
-    image: require('./assets/photos/cai-rang-floating-market.jpg'),
-  },
-];
+const placeImages: Record<PlaceImageKey, ImageSourcePropType> = {
+  benThanhMarket: require('./assets/photos/ben-thanh-market.jpg'),
+  caiRangFloatingMarket: require('./assets/photos/cai-rang-floating-market.jpg'),
+  haLongBay: require('./assets/photos/ha-long-bay.jpg'),
+  hoanKiemLake: require('./assets/photos/hoan-kiem-lake.jpg'),
+  hoiAnAncientTown: require('./assets/photos/hoi-an-ancient-town.jpg'),
+  hueImperialCity: require('./assets/photos/hue-imperial-city.jpg'),
+  myKheBeach: require('./assets/photos/my-khe-beach.jpg'),
+  phongNhaCave: require('./assets/photos/phong-nha-cave.jpg'),
+  phuQuocBeach: require('./assets/photos/phu-quoc-beach.jpg'),
+};
+
+const places: Place[] = createPlaceModels(travelPlaceSeeds);
+
+function createPlaceModels(records: StoredTravelPlace[]): Place[] {
+  return records
+    .slice()
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .map((record) => ({
+      id: record.id,
+      name: record.name,
+      city: toCity(record.city),
+      category: record.category,
+      description: record.description,
+      history: record.history,
+      bestTime: record.bestTime,
+      ticketPrice: record.ticketPrice,
+      openHours: record.openHours,
+      lat: record.lat,
+      lng: record.lng,
+      tags: record.tags,
+      whyGo: record.whyGo,
+      travelTip: record.travelTip,
+      image: record.imageUrl
+        ? { uri: record.imageUrl }
+        : placeImages[record.imageKey] ?? placeImages.haLongBay,
+    }));
+}
+
+function toCity(value: string): City {
+  return cities.includes(value as City) ? (value as City) : 'Other';
+}
 
 const foods: Food[] = [
   {
@@ -1336,11 +1389,11 @@ const phrases: Phrase[] = [
 ];
 
 const emergencyCards = [
-  { id: 'police', titleKey: 'Police', phone: '113', phrase: 'Cho tôi gọi cảnh sát.' },
-  { id: 'fire', titleKey: 'Fire', phone: '114', phrase: 'Có cháy, giúp tôi.' },
-  { id: 'ambulance', titleKey: 'Ambulance', phone: '115', phrase: 'Tôi cần xe cấp cứu.' },
-  { id: 'tourist_police', titleKey: 'Tourist Police', phone: '1800 6118', phrase: '' },
-  { id: 'tourist_hotline', titleKey: 'Tourist Hotline', phone: '0588 247 247', phrase: '' },
+  { id: 'police', titleKey: 'Cảnh sát', phone: '113', phrase: 'Cho tôi gọi cảnh sát.' },
+  { id: 'fire', titleKey: 'Cứu hỏa', phone: '114', phrase: 'Có cháy, giúp tôi.' },
+  { id: 'ambulance', titleKey: 'Cấp cứu', phone: '115', phrase: 'Tôi cần xe cấp cứu.' },
+  { id: 'tourist_police', titleKey: 'Cảnh sát du lịch', phone: '1800 6118', phrase: '' },
+  { id: 'tourist_hotline', titleKey: 'Đường dây nóng du lịch', phone: '0588 247 247', phrase: '' },
 ] as const;
 
 const tripStyles = ['Culture + Food', 'Relaxed', 'Family', 'Business'] as const;
@@ -1350,7 +1403,19 @@ const bottomTabItems: { id: TabId; labelKey: TranslationKey; icon: typeof Home }
   { id: 'home', labelKey: 'nav.explore' as TranslationKey, icon: Home },
   { id: 'favorites', labelKey: 'nav.favorites' as TranslationKey, icon: Heart },
   { id: 'history', labelKey: 'nav.history' as TranslationKey, icon: HistoryIcon },
+  { id: 'ai', labelKey: 'nav.ai' as TranslationKey, icon: MessageCircle },
   { id: 'account', labelKey: 'nav.account' as TranslationKey, icon: User },
+];
+
+const featureShortcuts: { id: TabId; labelKey: TranslationKey; icon: typeof Home }[] = [
+  { id: 'explore', labelKey: 'home.tool.explore', icon: MapPin },
+  { id: 'food', labelKey: 'home.tool.food', icon: Utensils },
+  { id: 'culture', labelKey: 'home.tool.culture', icon: BookOpen },
+  { id: 'phrases', labelKey: 'home.tool.phrases', icon: Volume2 },
+  { id: 'emergency', labelKey: 'home.tool.emergency', icon: Phone },
+  { id: 'ai', labelKey: 'home.tool.ai', icon: Bot },
+  { id: 'map', labelKey: 'home.tool.map', icon: MapIcon },
+  { id: 'offline', labelKey: 'home.tool.offline', icon: WifiOff },
 ];
 
 const quickQuestions = [
@@ -1360,7 +1425,17 @@ const quickQuestions = [
   'Kể về Chợ Bến Thành',
 ];
 
-const popularPlaceIds = ['ha_long_bay', 'pho_co_hanoi', 'ba_na_hills', 'phu_quoc', 'ben_thanh', 'mui_ne'];
+const popularPlaceIds = [
+  'ha_long_bay',
+  'ninh_binh',
+  'hoi_an',
+  'phu_quoc',
+  'phong_nha',
+  'can_tho',
+  'ba_na_hills',
+  'ben_thanh',
+  'mui_ne',
+];
 const popularFoodIds = ['pho', 'banh_mi', 'bun_cha', 'com_tam', 'bun_bo_hue'];
 
 /* ============================================================
@@ -1393,36 +1468,81 @@ function getExperienceSubtitle(city: City, locale: Locale): string {
   return `Recommendations for ${city}`;
 }
 
+function getSelectedCities(profile: UserProfile): City[] {
+  const selected =
+    profile.selectedCities?.filter((city): city is City => cities.includes(city as City)) ?? [];
+  const unique = Array.from(new Set(selected));
+  const fallbackCity = cities.includes(profile.currentCity) ? profile.currentCity : defaultProfile.currentCity;
+  return unique.length > 0 ? unique : [fallbackCity];
+}
+
+function normalizeProfile(profile: UserProfile): UserProfile {
+  const selectedCities = getSelectedCities(profile);
+  return {
+    ...profile,
+    selectedCities,
+    currentCity: selectedCities[0] ?? profile.currentCity,
+  };
+}
+
+function getSelectedCitiesLabel(profile: UserProfile): string {
+  const selected = getSelectedCities(profile);
+  if (selected.length <= 2) return selected.join(', ');
+  return `${selected.slice(0, 2).join(', ')} +${selected.length - 2}`;
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd');
+}
+
+function toggleProfileCity(profile: UserProfile, city: City): UserProfile {
+  const current = getSelectedCities(profile);
+  const exists = current.includes(city);
+  const nextCities = exists
+    ? current.filter((item) => item !== city)
+    : [...current, city];
+  const safeCities = nextCities.length > 0 ? nextCities : [city];
+  return {
+    ...profile,
+    selectedCities: safeCities,
+    currentCity: safeCities[0],
+  };
+}
+
 function getEmailDomain(email: string): string {
   return email.split('@')[1] ?? '';
 }
 
-function decodeJwtPayload(token: string): Record<string, unknown> {
-  try {
-    const [, payload] = token.split('.');
-    if (!payload) return {};
-    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
-    return JSON.parse(atob(padded)) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+function authSessionFromQrUser(user: QrLoginUser, signedInAt = new Date().toISOString()): AuthSessionState {
+  return {
+    lastSeenAt: signedInAt,
+    provider: 'google',
+    signedInAt,
+    user: {
+      email: user.email,
+      givenName: user.givenName,
+      id: user.id,
+      name: user.name,
+      picture: user.picture,
+      verifiedEmail: user.verifiedEmail,
+    },
+  };
 }
 
-function normalizeGoogleUser(raw: Record<string, unknown>): GoogleUser {
-  const email = typeof raw.email === 'string' ? raw.email : '';
+function authSessionFromAccountUser(
+  user: AccountAuthUser,
+  signedInAt = new Date().toISOString(),
+  lastSeenAt = new Date().toISOString(),
+): AuthSessionState {
   return {
-    id: typeof raw.sub === 'string' ? raw.sub : typeof raw.id === 'string' ? raw.id : email,
-    email,
-    name:
-      typeof raw.name === 'string'
-        ? raw.name
-        : typeof raw.given_name === 'string'
-          ? raw.given_name
-          : email,
-    givenName: typeof raw.given_name === 'string' ? raw.given_name : undefined,
-    picture: typeof raw.picture === 'string' ? raw.picture : undefined,
-    verifiedEmail: raw.email_verified === true,
+    lastSeenAt,
+    provider: 'google',
+    signedInAt,
+    user,
   };
 }
 
@@ -1432,10 +1552,18 @@ function buildAiAnswer(
   tripDays: number,
   tripStyle: TripStyle,
   locale: Locale,
+  placeItems: Place[] = places,
 ): string {
-  const normalized = question.toLowerCase();
-  const matchedPlace = places.find((place) => normalized.includes(place.name.toLowerCase()));
-  const matchedFood = foods.find((food) => normalized.includes(food.name.toLowerCase()));
+  const normalized = normalizeSearchText(question);
+  const matchedPlace = placeItems.find((place) => {
+    const placeName = normalizeSearchText(place.name);
+    const placeText = normalizeSearchText(`${place.name} ${place.city} ${place.category} ${place.tags.join(' ')}`);
+    return normalized.includes(placeName) || (normalized.length >= 3 && placeText.includes(normalized));
+  });
+  const matchedFood = foods.find((food) => {
+    const foodText = normalizeSearchText(`${food.name} ${food.englishName} ${food.region}`);
+    return normalized.length >= 3 && foodText.includes(normalized);
+  });
 
   if (matchedPlace) {
     if (locale === 'vi') {
@@ -1453,40 +1581,40 @@ function buildAiAnswer(
     return `${matchedFood.name} is ${matchedFood.englishName}. This dish is ${spice}, around ${matchedFood.priceRange}. How to order: ${matchedFood.howToOrder}.`;
   }
 
-  if (/(cross|traffic|street)/.test(normalized)) {
+  if (/(cross|traffic|street|qua duong)/.test(normalized)) {
     return locale === 'vi'
       ? 'Khi qua đường ở Việt Nam, hãy bước đều, đi chậm, và tránh dừng đột ngột. Tài xế thường giảm tốc khi thấy bạn đã bắt đầu qua đường.'
       : 'When crossing streets in Vietnam, walk steadily, slowly, and avoid sudden stops. Drivers usually slow down once they see you commit to crossing.';
   }
 
-  if (/(temple|pagoda|chùa)/.test(normalized)) {
+  if (/(temple|pagoda|chua)/.test(normalized)) {
     return locale === 'vi'
       ? 'Khi vào chùa, hãy mặc lịch sự, nói nhỏ và tháo mũ. Không chỉ trỏ vào tượng hoặc chạm vào đồ lễ.'
       : 'When visiting temples, dress modestly, speak softly, and remove your hat. Do not point at statues or touch offerings.';
   }
 
-  if (/(bargain|mặc cả|price|giá)/.test(normalized)) {
+  if (/(bargain|mac ca|price|gia)/.test(normalized)) {
     return locale === 'vi'
       ? 'Mặc cả phổ biến ở chợ truyền thống nhưng không phổ biến ở siêu thị, quán cà phê hay nhà hàng. Hãy giữ thái độ thân thiện.'
       : 'Bargaining is common in traditional markets, but not in malls, cafes or restaurants. Keep the tone friendly.';
   }
 
-  if (/(itinerary|行程|lịch trình|plan|kế hoạch|days|ngày)/.test(normalized)) {
+  if (/(itinerary|行程|lich trinh|plan|ke hoach|days|ngay)/.test(normalized)) {
     const days = tripDays;
-    const city = profile.currentCity;
+    const city = getSelectedCitiesLabel(profile);
     if (locale === 'vi') {
       return `Lịch trình ${days} ngày tại ${city} (phong cách ${tripStyle}):\n\nNgày 1: Khám phá trung tâm, ăn sáng đặc sản địa phương, tham quan điểm nổi bật.\nNgày 2: Trải nghiệm văn hóa, thử món mới, dạo phố cổ.\n\nLưu ý: Mang theo nước, giày thoải mái và bản đồ offline.`;
     }
     return `${days} day ${tripStyle} itinerary for ${city}:\n\nDay 1: Explore the city center, try a local breakfast and visit a top attraction.\nDay 2: Immerse in culture, try a new dish and walk the old quarter.\n\nTip: Bring water, comfortable shoes and an offline map.`;
   }
 
-  if (/(translate|dịch|번역)/.test(normalized)) {
+  if (/(translate|dich|번역)/.test(normalized)) {
     return locale === 'vi'
       ? 'Tôi có thể dịch câu ngắn sang tiếng Việt. Hãy thử:\n- "Hello" → "Xin chào"\n- "Thank you" → "Cảm ơn"\n- "How much?" → "Bao nhiêu tiền?"'
       : 'I can translate short phrases to Vietnamese. Try:\n- "Hello" → "Xin chào"\n- "Thank you" → "Cảm ơn"\n- "How much?" → "Bao nhiêu tiền?"';
   }
 
-  if (/(hello|hi|chào|xin chào)/.test(normalized)) {
+  if (/(hello|hi|chao|xin chao)/.test(normalized)) {
     return locale === 'vi'
       ? 'Chào bạn! Tôi có thể giúp gì cho chuyến đi của bạn?'
       : 'Hello! How can I help with your trip?';
@@ -1571,6 +1699,16 @@ function formatHistoryTimestamp(timestamp: string): string {
   });
 }
 
+function formatAccountMonth(timestamp?: string): string {
+  if (!timestamp) return '—';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
 function isToday(timestamp: string): boolean {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return false;
@@ -1588,8 +1726,9 @@ function createItineraryConfirmation(
   tripDays: number,
   tripStyle: TripStyle,
   locale: Locale,
+  placeItems: Place[] = places,
 ): ItineraryConfirmation {
-  const body = buildAiAnswer(prompt, profile, tripDays, tripStyle, locale);
+  const body = buildAiAnswer(prompt, profile, tripDays, tripStyle, locale, placeItems);
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     title: `${tripDays} day ${tripStyle} itinerary`,
@@ -1610,7 +1749,7 @@ function buildItineraryEmailBody(
   return [
     `Hi ${recipientName || 'traveler'},`,
     '',
-    `Here is your Vinago+ itinerary confirmation for ${profile.currentCity}.`,
+    `Here is your Vinago+ itinerary confirmation for ${getSelectedCitiesLabel(profile)}.`,
     '',
     `Plan: ${itinerary.title}`,
     `Purpose: ${profile.purpose}`,
@@ -1628,12 +1767,85 @@ function openInMaps(place: Place): void {
   const url =
     Platform.OS === 'ios'
       ? `maps:0,0?q=${encodeURIComponent(place.name)}@${place.lat},${place.lng}`
-      : `geo:${place.lat},${place.lng}?q=${encodeURIComponent(place.name)}`;
+      : Platform.OS === 'android'
+        ? `geo:${place.lat},${place.lng}?q=${encodeURIComponent(place.name)}`
+        : `https://www.openstreetmap.org/?mlat=${place.lat}&mlon=${place.lng}#map=16/${place.lat}/${place.lng}`;
   void Linking.openURL(url).catch(() => {
     void Linking.openURL(
-      `https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lng}`,
+      `https://www.openstreetmap.org/?mlat=${place.lat}&mlon=${place.lng}#map=16/${place.lat}/${place.lng}`,
     );
   });
+}
+
+function escapeHtml(value?: string): string {
+  return (value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildOpenStreetMapHtml({
+  lat,
+  lng,
+  zoom,
+  title,
+  subtitle,
+  attribution,
+  loading,
+  unavailable,
+}: {
+  lat: number;
+  lng: number;
+  zoom: number;
+  title?: string;
+  subtitle?: string;
+  attribution: string;
+  loading: string;
+  unavailable: string;
+}) {
+  const popup = title
+    ? `<strong>${escapeHtml(title)}</strong>${subtitle ? `<br />${escapeHtml(subtitle)}` : ''}`
+    : '';
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+      html, body, #map { height: 100%; margin: 0; padding: 0; }
+      body { background: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      #status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #64748b; font-weight: 700; text-align: center; padding: 24px; z-index: 1; }
+      .leaflet-container { font: inherit; }
+    </style>
+  </head>
+  <body>
+    <div id="map"><div id="status">${escapeHtml(loading)}</div></div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+      (function () {
+        try {
+          var lat = ${lat};
+          var lng = ${lng};
+          var zoom = ${zoom};
+          var map = L.map('map', { zoomControl: true, attributionControl: true }).setView([lat, lng], zoom);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '${escapeHtml(attribution)}'
+          }).addTo(map);
+          ${title ? `L.marker([lat, lng]).addTo(map).bindPopup('${popup}').openPopup();` : ''}
+          var status = document.getElementById('status');
+          if (status) status.remove();
+        } catch (error) {
+          var status = document.getElementById('status');
+          if (status) status.textContent = '${escapeHtml(unavailable)}';
+        }
+      })();
+    </script>
+  </body>
+</html>`;
 }
 
 /* ============================================================
@@ -1948,11 +2160,12 @@ function OnboardingScreen({
   onSave: () => void;
   t: (key: TranslationKey) => string;
 }) {
-  const [step, setStep] = useState<0 | 1 | 2 | 3>(0);
+  const [step, setStep] = useState<0 | 1 | 2 | 3 | 4>(0);
   const isWelcome = step === 0;
   const isLanguage = step === 1;
   const isPurpose = step === 2;
   const isCity = step === 3;
+  const isDays = step === 4;
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
@@ -2003,11 +2216,12 @@ function OnboardingScreen({
                   onPress={() => setDraftProfile((d) => ({ ...d, language }))}
                 >
                   <View style={styles.languageFlag}>
-                    <Text style={styles.languageFlagText}>
-                      {language === 'English' ? '🇬🇧' : '🇻🇳'}
-                    </Text>
+                    <Text style={styles.languageFlagText}>{languageFlags[language]}</Text>
                   </View>
-                  <Text style={styles.languageLabel}>{language}</Text>
+                  <View style={styles.languageTextStack}>
+                    <Text style={styles.languageLabel}>{languageNativeNames[language]}</Text>
+                    <Text style={styles.languageSubLabel}>{languageSecondaryNames[language]}</Text>
+                  </View>
                   {draftProfile.language === language ? (
                     <Check color={colors.primary} size={20} />
                   ) : null}
@@ -2026,14 +2240,18 @@ function OnboardingScreen({
           <View style={styles.stepCard}>
             <Text style={styles.stepTitle}>{t('onboarding.purposeTitle')}</Text>
             <ChipGrid>
-              {purposes.map((purpose) => (
-                <ChoiceChip
-                  key={purpose}
-                  label={purpose}
-                  active={draftProfile.purpose === purpose}
-                  onPress={() => setDraftProfile((d) => ({ ...d, purpose }))}
-                />
-              ))}
+              {purposes.map((purpose) => {
+                const Icon = purposeIcons[purpose];
+                return (
+                  <ChoiceChip
+                    key={purpose}
+                    label={purpose}
+                    active={draftProfile.purpose === purpose}
+                    onPress={() => setDraftProfile((d) => ({ ...d, purpose }))}
+                    leading={<Icon color={draftProfile.purpose === purpose ? colors.surface : colors.primary} size={16} />}
+                  />
+                );
+              })}
             </ChipGrid>
             <PrimaryButton
               label={t('onboarding.continue')}
@@ -2046,7 +2264,50 @@ function OnboardingScreen({
         {isCity ? (
           <View style={styles.stepCard}>
             <Text style={styles.stepTitle}>{t('onboarding.cityTitle')}</Text>
-            <Text style={styles.stepSubtitle}>{t('onboarding.daysTitle')}</Text>
+            <Text style={styles.stepSubtitle}>{getSelectedCitiesLabel(draftProfile)}</Text>
+            <View style={styles.cityList}>
+              {onboardingCities.map((city) => (
+                <ChoiceChip
+                  key={city}
+                  label={city}
+                  active={getSelectedCities(draftProfile).includes(city)}
+                  onPress={() => setDraftProfile((d) => toggleProfileCity(d, city))}
+                />
+              ))}
+            </View>
+            <PrimaryButton
+              label={t('onboarding.continue')}
+              onPress={() => setStep(4)}
+              icon={ChevronRight}
+            />
+          </View>
+        ) : null}
+
+        {isDays ? (
+          <View style={styles.stepCard}>
+            <Text style={styles.stepTitle}>{t('onboarding.daysTitle')}</Text>
+            <View style={styles.tripDaysPicker}>
+              <Pressable
+                style={styles.dayAdjustButton}
+                onPress={() =>
+                  setDraftProfile((d) => ({ ...d, tripDays: Math.max(1, d.tripDays - 1) }))
+                }
+              >
+                <Text style={styles.dayAdjustText}>-</Text>
+              </Pressable>
+              <View style={styles.dayNumberWrap}>
+                <Text style={styles.dayNumber}>{draftProfile.tripDays}</Text>
+                <Text style={styles.dayNumberLabel}>{t('onboarding.tripDays')}</Text>
+              </View>
+              <Pressable
+                style={styles.dayAdjustButton}
+                onPress={() =>
+                  setDraftProfile((d) => ({ ...d, tripDays: Math.min(14, d.tripDays + 1) }))
+                }
+              >
+                <Text style={styles.dayAdjustText}>+</Text>
+              </Pressable>
+            </View>
             <View style={styles.daysRow}>
               {[1, 2, 3, 5].map((n) => (
                 <Pressable
@@ -2068,16 +2329,6 @@ function OnboardingScreen({
                 </Pressable>
               ))}
             </View>
-            <View style={styles.cityList}>
-              {onboardingCities.map((city) => (
-                <ChoiceChip
-                  key={city}
-                  label={city}
-                  active={draftProfile.currentCity === city}
-                  onPress={() => setDraftProfile((d) => ({ ...d, currentCity: city }))}
-                />
-              ))}
-            </View>
             <PrimaryButton label={t('onboarding.start')} onPress={onSave} />
           </View>
         ) : null}
@@ -2090,32 +2341,55 @@ function HomeScreen({
   profile,
   recentSearches,
   popularPlaces,
+  nearbyPlaces,
   popularFoods,
+  placesCount,
+  citiesCount,
   onOpenSearch,
   onOpenPlace,
   onOpenFood,
   onOpenFilter,
+  onOpenTab,
   t,
 }: {
   profile: UserProfile;
   recentSearches: RecentSearch[];
   popularPlaces: Place[];
+  nearbyPlaces: Place[];
   popularFoods: Food[];
+  placesCount: number;
+  citiesCount: number;
   onOpenSearch: () => void;
   onOpenPlace: (id: string) => void;
   onOpenFood: (id: string) => void;
   onOpenFilter: () => void;
+  onOpenTab: (tab: TabId) => void;
   t: (key: TranslationKey) => string;
 }) {
   const [quickFilter, setQuickFilter] = useState<'all' | 'food' | 'stay' | 'transport'>('all');
   const filteredPlaces = useMemo(() => {
     if (quickFilter === 'food') return [];
+    const themedPlaces = popularPlaces.filter((place) => {
+      const haystack = `${place.category} ${place.tags.join(' ')}`.toLowerCase();
+      if (quickFilter === 'stay') {
+        return /(vịnh|biển|đảo|núi|cao nguyên|hang|suối|đồi|thiên nhiên|bay|beach|cave|mountain)/.test(haystack);
+      }
+      if (quickFilter === 'transport') {
+        return /(di sản|lịch sử|di tích|chùa|hoàng|unesco|phố cổ|chăm|heritage|history)/.test(haystack);
+      }
+      return true;
+    });
+    if (quickFilter !== 'all' && themedPlaces.length > 0) return themedPlaces;
     return popularPlaces;
   }, [quickFilter, popularPlaces]);
   const filteredFoods = useMemo(() => {
     if (quickFilter !== 'food') return [];
     return popularFoods;
   }, [quickFilter, popularFoods]);
+  const { data: translatedPlaces } = useTranslatedData(filteredPlaces);
+  const { data: translatedFoods } = useTranslatedData(filteredFoods);
+  const { data: translatedNearbyPlaces } = useTranslatedData(nearbyPlaces);
+  const { data: translatedSelectedCitiesLabel } = useTranslatedData(getSelectedCitiesLabel(profile));
 
   return (
     <ScrollView contentContainerStyle={styles.homeContent} showsVerticalScrollIndicator={false}>
@@ -2135,6 +2409,8 @@ function HomeScreen({
         </Pressable>
       </Pressable>
 
+
+
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -2143,8 +2419,8 @@ function HomeScreen({
         {[
           { id: 'all', label: t('home.quick.all'), icon: Compass },
           { id: 'food', label: t('home.quick.food'), icon: Utensils },
-          { id: 'stay', label: t('home.quick.stay'), icon: ShoppingBag },
-          { id: 'transport', label: t('home.quick.transport'), icon: Plane },
+          { id: 'stay', label: t('home.quick.stay'), icon: TreePine },
+          { id: 'transport', label: t('home.quick.transport'), icon: BookOpen },
         ].map((chip) => {
           const Icon = chip.icon;
           const active = quickFilter === chip.id;
@@ -2168,6 +2444,27 @@ function HomeScreen({
         })}
       </ScrollView>
 
+      <View style={styles.homeSection}>
+        <Text style={styles.homeSectionTitle}>{t('home.toolsTitle')}</Text>
+        <View style={styles.toolGrid}>
+          {featureShortcuts.map((shortcut) => {
+            const Icon = shortcut.icon;
+            return (
+              <Pressable
+                key={shortcut.id}
+                style={styles.toolTile}
+                onPress={() => onOpenTab(shortcut.id)}
+              >
+                <View style={styles.toolIcon}>
+                  <Icon color={colors.primary} size={20} />
+                </View>
+                <Text style={styles.toolLabel}>{t(shortcut.labelKey)}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
       {recentSearches.length > 0 ? (
         <View style={styles.homeSection}>
           <SectionTitle title={t('search.recent')} />
@@ -2185,7 +2482,7 @@ function HomeScreen({
       <View style={styles.homeSection}>
         <View style={styles.homeSectionHeader}>
           <Text style={styles.homeSectionTitle}>{t('home.popularTitle')}</Text>
-          <Pressable>
+          <Pressable onPress={() => onOpenTab('explore')}>
             <Text style={styles.homeSectionLink}>{t('home.popularViewAll')}</Text>
           </Pressable>
         </View>
@@ -2195,7 +2492,7 @@ function HomeScreen({
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.popularRow}
           >
-            {filteredFoods.map((food) => (
+            {translatedFoods.map((food) => (
               <Pressable
                 key={food.id}
                 style={styles.popularCard}
@@ -2213,7 +2510,7 @@ function HomeScreen({
           </ScrollView>
         ) : (
           <View style={styles.popularGrid}>
-            {filteredPlaces.map((place) => (
+            {translatedPlaces.map((place) => (
               <Pressable
                 key={place.id}
                 style={styles.popularGridCard}
@@ -2239,11 +2536,11 @@ function HomeScreen({
           </Text>
         </View>
         <Text style={styles.homeSectionSubtitle}>
-          {getExperienceSubtitle(profile.currentCity, getLocale(profile.language))}
+          {t('home.selectedCities')}: {translatedSelectedCitiesLabel}
         </Text>
-        {popularPlaces.length > 0 ? (
+        {translatedNearbyPlaces.length > 0 ? (
           <View style={styles.popularGrid}>
-            {popularPlaces.slice(0, 3).map((place) => (
+            {translatedNearbyPlaces.slice(0, 3).map((place) => (
               <Pressable
                 key={`nearby-${place.id}`}
                 style={styles.popularGridCard}
@@ -2266,60 +2563,78 @@ function HomeScreen({
 function ExploreScreen({
   places: items,
   selectedCity,
+  selectedProfileCities,
+  availableCities,
   onCityChange,
   onOpenPlace,
   onOpenFilter,
+  onOpenSearch,
   t,
 }: {
   places: Place[];
   selectedCity: City | 'All';
+  selectedProfileCities: City[];
+  availableCities: City[];
   onCityChange: (city: City | 'All') => void;
   onOpenPlace: (id: string) => void;
   onOpenFilter: () => void;
+  onOpenSearch: () => void;
   t: (key: TranslationKey) => string;
 }) {
-  const cityTabs: (City | 'All')[] = ['All', 'Hà Nội', 'Đà Nẵng', 'Hội An', 'Huế', 'Hạ Long', 'Nha Trang', 'Đà Lạt'];
+  const cityTabs: (City | 'All')[] = [
+    'All',
+    ...selectedProfileCities.filter((city) => availableCities.includes(city)),
+    ...availableCities.filter((city) => !selectedProfileCities.includes(city)),
+  ];
+  const { data: translatedItems } = useTranslatedData(items);
   return (
     <View style={styles.flexOne}>
       <View style={styles.exploreTopRow}>
-        <Text style={styles.exploreTitle}>{t('explore.title')}</Text>
+        <View>
+          <Text style={styles.exploreTitle}>{t('explore.title')}</Text>
+          <Text style={styles.exploreSubtitle}>
+            {items.length} {t('explore.countLabel')}
+          </Text>
+        </View>
         <View style={styles.rowGap}>
           <IconButton icon={Filter} onPress={onOpenFilter} />
-          <IconButton icon={SearchIcon} onPress={() => {}} />
+          <IconButton icon={SearchIcon} onPress={onOpenSearch} />
         </View>
       </View>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.exploreCityScroll}
-        contentContainerStyle={styles.exploreCityRow}
-      >
-        {cityTabs.map((city) => (
-          <Pressable
-            key={city}
-            style={[styles.exploreCityTab, selectedCity === city && styles.exploreCityTabActive]}
-            onPress={() => onCityChange(city)}
-          >
-            <Text
-              style={[
-                styles.exploreCityTabText,
-                selectedCity === city && styles.exploreCityTabTextActive,
-              ]}
+      <View style={styles.exploreCityRail}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.exploreCityScroll}
+          contentContainerStyle={styles.exploreCityRow}
+        >
+          {cityTabs.map((city) => (
+            <Pressable
+              key={city}
+              style={[styles.exploreCityTab, selectedCity === city && styles.exploreCityTabActive]}
+              onPress={() => onCityChange(city)}
             >
-              {city === 'All' ? t('explore.allCities') : city}
-            </Text>
-          </Pressable>
-        ))}
-      </ScrollView>
+              <Text
+                style={[
+                  styles.exploreCityTabText,
+                  selectedCity === city && styles.exploreCityTabTextActive,
+                ]}
+              >
+                {city === 'All' ? t('explore.allCities') : city}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      </View>
       <ScrollView contentContainerStyle={styles.exploreList} showsVerticalScrollIndicator={false}>
-        {items.length === 0 ? (
+        {translatedItems.length === 0 ? (
           <EmptyState
             icon={MapPin}
             title={t('explore.noResults')}
             body={t('explore.noResultsBody')}
           />
         ) : (
-          items.map((place) => (
+          translatedItems.map((place) => (
             <Pressable
               key={place.id}
               style={styles.exploreListCard}
@@ -2352,6 +2667,7 @@ function PlaceDetailScreen({
   onBack,
   onOpenMap,
   onAskAi,
+  onOpenLivePreview,
   t,
 }: {
   place: Place;
@@ -2360,8 +2676,10 @@ function PlaceDetailScreen({
   onBack: () => void;
   onOpenMap: () => void;
   onAskAi: () => void;
+  onOpenLivePreview: () => void;
   t: (key: TranslationKey) => string;
 }) {
+  const { data: translatedPlace } = useTranslatedData(place);
   return (
     <ScrollView contentContainerStyle={styles.placeDetailContent} showsVerticalScrollIndicator={false}>
       <View style={styles.placeDetailImageWrap}>
@@ -2387,21 +2705,21 @@ function PlaceDetailScreen({
         </View>
       </View>
       <View style={styles.placeDetailBody}>
-        <Text style={styles.placeDetailName}>{place.name}</Text>
+        <Text style={styles.placeDetailName}>{translatedPlace.name}</Text>
         <Text style={styles.placeDetailSub}>
-          {place.city} · {place.category}
+          {translatedPlace.city} · {translatedPlace.category}
         </Text>
         <View style={styles.ratingRow}>
           <Star color={colors.accent} fill={colors.accent} size={14} />
           <Text style={styles.ratingText}>4.8 (212 đánh giá)</Text>
         </View>
         <SectionTitle title={t('place.aboutTitle')} />
-        <Text style={styles.bodyText}>{place.description}</Text>
+        <Text style={styles.bodyText}>{translatedPlace.description}</Text>
         <SectionTitle title={t('place.whyGoTitle')} />
-        <Text style={styles.bodyText}>{place.whyGo}</Text>
+        <Text style={styles.bodyText}>{translatedPlace.whyGo}</Text>
         <SectionTitle title={t('place.tagsTitle')} />
         <View style={styles.tagRow}>
-          {place.tags.map((tag) => (
+          {translatedPlace.tags.map((tag) => (
             <View key={tag} style={styles.tag}>
               <Text style={styles.tagText}>{tag}</Text>
             </View>
@@ -2411,15 +2729,15 @@ function PlaceDetailScreen({
         <View style={styles.infoCard}>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>{t('place.bestTime')}</Text>
-            <Text style={styles.infoValue}>{place.bestTime}</Text>
+            <Text style={styles.infoValue}>{translatedPlace.bestTime}</Text>
           </View>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>{t('place.ticket')}</Text>
-            <Text style={styles.infoValue}>{place.ticketPrice}</Text>
+            <Text style={styles.infoValue}>{translatedPlace.ticketPrice}</Text>
           </View>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>{t('place.openHours')}</Text>
-            <Text style={styles.infoValue}>{place.openHours}</Text>
+            <Text style={styles.infoValue}>{translatedPlace.openHours}</Text>
           </View>
         </View>
         <Pressable style={styles.mapPreview} onPress={onOpenMap}>
@@ -2430,6 +2748,16 @@ function PlaceDetailScreen({
             </Text>
           </View>
           <Text style={styles.mapOpenLink}>{t('place.openInMaps')}</Text>
+        </Pressable>
+        <Pressable style={styles.livePreviewCta} onPress={onOpenLivePreview}>
+          <View style={styles.livePreviewIcon}>
+            <Camera color={colors.surface} size={18} />
+          </View>
+          <View style={styles.livePreviewCopy}>
+            <Text style={styles.livePreviewTitle}>See this place live</Text>
+            <Text style={styles.livePreviewBody}>Ask a local to show you around live for $1.</Text>
+          </View>
+          <ChevronRight color={colors.primary} size={18} />
         </Pressable>
         <PrimaryButton
           label={isFavorite ? t('place.saved') : t('place.save')}
@@ -2445,13 +2773,85 @@ function PlaceDetailScreen({
   );
 }
 
+function TranslatedLivePreviewRequestScreen({
+  place,
+  isSubmitting,
+  errorMessage,
+  onPayAndRequest,
+  onBack,
+}: {
+  place: LivePreviewPlaceSummary;
+  isSubmitting: boolean;
+  errorMessage: string | null;
+  onPayAndRequest: (input: { requestedLanguage: string; note: string }) => void;
+  onBack: () => void;
+}) {
+  const { data: translatedPlace } = useTranslatedData(place);
+
+  return (
+    <LivePreviewRequestScreen
+      place={translatedPlace}
+      isSubmitting={isSubmitting}
+      errorMessage={errorMessage}
+      onPayAndRequest={onPayAndRequest}
+      onBack={onBack}
+    />
+  );
+}
+
+function TranslatedLivePreviewWaitingScreen({
+  request,
+  role,
+  errorMessage,
+  onRefresh,
+  onJoinCall,
+  onCancel,
+  onOpenCompletion,
+}: {
+  request: LivePreviewRequest | null;
+  role: LivePreviewActorRole;
+  errorMessage: string | null;
+  onRefresh: () => void;
+  onJoinCall: () => void;
+  onCancel: () => void;
+  onOpenCompletion: () => void;
+}) {
+  const placeCopy = useMemo(
+    () => (request ? { name: request.placeName, city: request.city } : null),
+    [request],
+  );
+  const { data: translatedPlaceCopy } = useTranslatedData(placeCopy);
+  const translatedRequest =
+    request && translatedPlaceCopy
+      ? {
+          ...request,
+          placeName: translatedPlaceCopy.name,
+          city: translatedPlaceCopy.city,
+        }
+      : request;
+
+  return (
+    <LivePreviewWaitingScreen
+      request={translatedRequest}
+      role={role}
+      errorMessage={errorMessage}
+      onRefresh={onRefresh}
+      onJoinCall={onJoinCall}
+      onCancel={onCancel}
+      onOpenCompletion={onOpenCompletion}
+    />
+  );
+}
+
 function FoodScreen({
   foods: items,
   onOpenFood,
+  onOpenSearch,
   t,
 }: {
   foods: Food[];
   onOpenFood: (id: string) => void;
+  onOpenSearch: () => void;
   t: (key: TranslationKey) => string;
 }) {
   const [tab, setTab] = useState<'all' | 'pho' | 'bun' | 'specialties'>('all');
@@ -2467,12 +2867,13 @@ function FoodScreen({
     if (tab === 'bun') return items.filter((f) => /Bún|Cơm|Mì/.test(f.name));
     return items.filter((f) => /Hội An|Đà Nẵng|Huế/.test(f.region));
   }, [tab, items]);
+  const { data: translatedFoods } = useTranslatedData(filtered);
 
   return (
     <View style={styles.flexOne}>
       <View style={styles.foodTopRow}>
         <Text style={styles.exploreTitle}>{t('food.title')}</Text>
-        <IconButton icon={SearchIcon} onPress={() => {}} />
+        <IconButton icon={SearchIcon} onPress={onOpenSearch} />
       </View>
       <ScrollView
         horizontal
@@ -2498,7 +2899,7 @@ function FoodScreen({
         ))}
       </ScrollView>
       <ScrollView contentContainerStyle={styles.foodList} showsVerticalScrollIndicator={false}>
-        {filtered.map((food) => (
+        {translatedFoods.map((food) => (
           <Pressable
             key={food.id}
             style={styles.foodListCard}
@@ -2539,6 +2940,7 @@ function FoodDetailScreen({
   onAskAi: () => void;
   t: (key: TranslationKey) => string;
 }) {
+  const { data: translatedFood } = useTranslatedData(food);
   return (
     <ScrollView contentContainerStyle={styles.placeDetailContent} showsVerticalScrollIndicator={false}>
       <View style={styles.foodDetailHero}>
@@ -2554,8 +2956,8 @@ function FoodDetailScreen({
         </View>
       </View>
       <View style={styles.placeDetailBody}>
-        <Text style={styles.placeDetailName}>{food.name}</Text>
-        <Text style={styles.placeDetailSub}>{food.englishName}</Text>
+        <Text style={styles.placeDetailName}>{translatedFood.name}</Text>
+        <Text style={styles.placeDetailSub}>{translatedFood.englishName}</Text>
         <View style={styles.ratingRow}>
           <Star color={colors.accent} fill={colors.accent} size={14} />
           <Text style={styles.ratingText}>4.8 (212 đánh giá)</Text>
@@ -2563,7 +2965,7 @@ function FoodDetailScreen({
         <View style={styles.infoCard}>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>{t('food.region')}</Text>
-            <Text style={styles.infoValue}>{food.region}</Text>
+            <Text style={styles.infoValue}>{translatedFood.region}</Text>
           </View>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>{t('food.spice')}</Text>
@@ -2573,7 +2975,7 @@ function FoodDetailScreen({
           </View>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>{t('food.price')}</Text>
-            <Text style={styles.infoValue}>{food.priceRange}</Text>
+            <Text style={styles.infoValue}>{translatedFood.priceRange}</Text>
           </View>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>{t('food.pronunciation')}</Text>
@@ -2581,19 +2983,19 @@ function FoodDetailScreen({
           </View>
         </View>
         <SectionTitle title={t('food.ingredientsTitle')} />
-        <Text style={styles.bodyText}>{food.ingredients.join(', ')}</Text>
-        {food.allergens.length > 0 ? (
+        <Text style={styles.bodyText}>{translatedFood.ingredients.join(', ')}</Text>
+        {translatedFood.allergens.length > 0 ? (
           <>
             <SectionTitle title={t('food.allergensTitle')} />
             <View style={styles.warningBox}>
               <ShieldAlert color={colors.warning} size={18} />
-              <Text style={styles.warningText}>{food.allergens.join(', ')}</Text>
+              <Text style={styles.warningText}>{translatedFood.allergens.join(', ')}</Text>
             </View>
           </>
         ) : null}
         <SectionTitle title={t('food.orderingTitle')} />
         <View style={styles.phraseCard}>
-          <Text style={styles.phraseEnglish}>{food.howToOrder}</Text>
+          <Text style={styles.phraseEnglish}>{translatedFood.howToOrder}</Text>
           <Text style={styles.phraseVietnamese}>{food.howToOrder}</Text>
           <Text style={styles.phrasePronunciation}>{food.pronunciation}</Text>
         </View>
@@ -2624,10 +3026,44 @@ function CultureScreen({
   onAskAi: () => void;
   t: (key: TranslationKey) => string;
 }) {
+  const [filter, setFilter] = useState<'all' | 'do' | 'dont'>('all');
+  const visibleTopics = topics.filter((_, idx) => {
+    if (filter === 'all') return true;
+    if (filter === 'do') return idx % 2 === 0;
+    return idx % 2 === 1;
+  });
+  const { data: translatedVisibleTopics } = useTranslatedData(visibleTopics);
   return (
     <ScrollView contentContainerStyle={styles.cultureContent} showsVerticalScrollIndicator={false}>
-      {topics.map((topic, idx) => {
-        const isDo = idx % 2 === 0;
+      <View style={styles.cultureHeader}>
+        <Text style={styles.cultureEyebrow}>{t('culture.eyebrow')}</Text>
+        <Text style={styles.exploreTitle}>{t('culture.title')}</Text>
+      </View>
+      <View style={styles.cultureTabs}>
+        {[
+          { id: 'all' as const, label: t('home.quick.all') },
+          { id: 'do' as const, label: t('culture.do') },
+          { id: 'dont' as const, label: t('culture.avoid') },
+        ].map((item) => (
+          <Pressable
+            key={item.id}
+            style={[styles.exploreCityTab, filter === item.id && styles.exploreCityTabActive]}
+            onPress={() => setFilter(item.id)}
+          >
+            <Text
+              style={[
+                styles.exploreCityTabText,
+                filter === item.id && styles.exploreCityTabTextActive,
+              ]}
+            >
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      {translatedVisibleTopics.map((topic, idx) => {
+        const originalIndex = topics.findIndex((item) => item.id === topic.id);
+        const isDo = originalIndex % 2 === 0;
         return (
           <View key={topic.id} style={styles.cultureCard}>
             <View style={styles.cultureBadgeRow}>
@@ -2691,8 +3127,25 @@ function PhrasesScreen({
   t: (key: TranslationKey) => string;
 }) {
   const [tab, setTab] = useState<string>('All');
-  const tabs = ['All', 'Greetings', 'Food', 'Emergency', 'Directions', 'Shopping'];
+  const tabs = [
+    { id: 'All', label: t('phrases.tabAll') },
+    { id: 'Greetings', label: t('phrases.tabGreetings') },
+    { id: 'Food', label: t('phrases.tabFood') },
+    { id: 'Emergency', label: t('phrases.tabEmergency') },
+    { id: 'Directions', label: t('phrases.tabDirections') },
+    { id: 'Shopping', label: t('phrases.tabShopping') },
+  ];
   const filtered = tab === 'All' ? items : items.filter((p) => p.situation === tab);
+  const { data: translatedPhrases } = useTranslatedData(filtered);
+  const speakPhrase = async (phrase: Phrase) => {
+    await Speech.stop();
+    Speech.speak(phrase.vietnamese, {
+      language: 'vi-VN',
+      pitch: 1,
+      rate: Platform.OS === 'ios' ? 0.48 : 0.8,
+    });
+  };
+
   return (
     <View style={styles.flexOne}>
       <ScrollView
@@ -2703,33 +3156,43 @@ function PhrasesScreen({
       >
         {tabs.map((tt) => (
           <Pressable
-            key={tt}
-            style={[styles.exploreCityTab, tab === tt && styles.exploreCityTabActive]}
-            onPress={() => setTab(tt)}
+            key={tt.id}
+            style={[styles.exploreCityTab, tab === tt.id && styles.exploreCityTabActive]}
+            onPress={() => setTab(tt.id)}
           >
             <Text
               style={[
                 styles.exploreCityTabText,
-                tab === tt && styles.exploreCityTabTextActive,
+                tab === tt.id && styles.exploreCityTabTextActive,
               ]}
             >
-              {tt}
+              {tt.label}
             </Text>
           </Pressable>
         ))}
       </ScrollView>
       <ScrollView contentContainerStyle={styles.phraseList} showsVerticalScrollIndicator={false}>
-        {filtered.map((phrase) => {
+        {translatedPhrases.map((phrase) => {
+          const sourcePhrase = filtered.find((item) => item.id === phrase.id) ?? phrase;
+          const translatedMeaning =
+            phrase.vietnamese === sourcePhrase.vietnamese ? sourcePhrase.english : phrase.vietnamese;
           const saved = isFavorite('phrase', phrase.id);
           return (
             <View key={phrase.id} style={styles.phraseRow}>
               <View style={styles.flexOne}>
-                <Text style={styles.phraseEnglish}>{phrase.english}</Text>
-                <Text style={styles.phraseVietnamese}>{phrase.vietnamese}</Text>
-                <Text style={styles.phrasePronunciation}>{phrase.pronunciation}</Text>
+                <Text style={styles.phraseEnglish}>{translatedMeaning}</Text>
+                <Text style={styles.phraseVietnamese}>{sourcePhrase.vietnamese}</Text>
+                <Text style={styles.phrasePronunciation}>{sourcePhrase.pronunciation}</Text>
               </View>
               <View style={styles.rowGap}>
-                <Pressable style={styles.phraseAudioButton}>
+                <Pressable
+                  accessibilityLabel={`${t('phrases.audioSample')}: ${sourcePhrase.vietnamese}`}
+                  accessibilityRole="button"
+                  style={styles.phraseAudioButton}
+                  onPress={() => {
+                    void speakPhrase(sourcePhrase);
+                  }}
+                >
                   <Volume2 color={colors.primary} size={18} />
                 </Pressable>
                 <Pressable onPress={() => onToggleFavorite('phrase', phrase.id)}>
@@ -2749,28 +3212,40 @@ function PhrasesScreen({
 }
 
 function EmergencyScreen({ t }: { t: (key: TranslationKey) => string }) {
+  const { data: translatedEmergencyCards } = useTranslatedData(emergencyCards);
+
   return (
     <ScrollView contentContainerStyle={styles.emergencyContent} showsVerticalScrollIndicator={false}>
-      {emergencyCards.map((card) => (
-        <View key={card.id} style={styles.emergencyRow}>
-          <View style={styles.emergencyIcon}>
-            {card.id === 'police' || card.id === 'tourist_police' ? (
-              <ShieldAlert color={colors.primary} size={22} />
-            ) : card.id === 'fire' ? (
-              <Sparkles color={colors.primary} size={22} />
-            ) : card.id === 'ambulance' ? (
-              <Plus color={colors.primary} size={22} />
-            ) : (
-              <Phone color={colors.primary} size={22} />
-            )}
+      {translatedEmergencyCards.map((card) => {
+        const sourceCard = emergencyCards.find((item) => item.id === card.id) ?? card;
+        return (
+          <View key={card.id} style={styles.emergencyRow}>
+            <View style={styles.emergencyIcon}>
+              {card.id === 'police' || card.id === 'tourist_police' ? (
+                <ShieldAlert color={colors.primary} size={22} />
+              ) : card.id === 'fire' ? (
+                <Sparkles color={colors.primary} size={22} />
+              ) : card.id === 'ambulance' ? (
+                <Plus color={colors.primary} size={22} />
+              ) : (
+                <Phone color={colors.primary} size={22} />
+              )}
+            </View>
+            <View style={styles.flexOne}>
+              <Text style={styles.emergencyName}>{card.titleKey}</Text>
+              {sourceCard.phrase ? (
+                <>
+                  <Text style={styles.emergencyPhrase}>{card.phrase}</Text>
+                  {card.phrase !== sourceCard.phrase ? (
+                    <Text style={styles.phraseVietnamese}>{sourceCard.phrase}</Text>
+                  ) : null}
+                </>
+              ) : null}
+            </View>
+            <Text style={styles.emergencyPhone}>{card.phone}</Text>
           </View>
-          <View style={styles.flexOne}>
-            <Text style={styles.emergencyName}>{card.titleKey}</Text>
-            {card.phrase ? <Text style={styles.emergencyPhrase}>{card.phrase}</Text> : null}
-          </View>
-          <Text style={styles.emergencyPhone}>{card.phone}</Text>
-        </View>
-      ))}
+        );
+      })}
     </ScrollView>
   );
 }
@@ -2781,13 +3256,21 @@ function FavoritesScreen({
   onOpenFood,
   t,
 }: {
-  records: { key: string; type: SavedItemType; id: string; title: string; subtitle: string }[];
+  records: {
+    key: string;
+    type: SavedItemType;
+    id: string;
+    title: string;
+    subtitle: string;
+    image?: ImageSourcePropType;
+  }[];
   onOpenPlace: (id: string) => void;
   onOpenFood: (id: string) => void;
   t: (key: TranslationKey) => string;
 }) {
   const [tab, setTab] = useState<'all' | 'place' | 'food' | 'phrase'>('all');
   const filtered = tab === 'all' ? records : records.filter((r) => r.type === tab);
+  const { data: translatedRecords } = useTranslatedData(filtered);
   const tabs: { id: typeof tab; label: string }[] = [
     { id: 'all', label: t('favorites.tabs.all') },
     { id: 'place', label: t('favorites.tabs.places') },
@@ -2827,7 +3310,7 @@ function FavoritesScreen({
             body={t('favorites.empty.body')}
           />
         ) : (
-          filtered.map((record) => (
+          translatedRecords.map((record) => (
             <Pressable
               key={record.key}
               style={styles.favoriteRow}
@@ -2836,6 +3319,13 @@ function FavoritesScreen({
                 if (record.type === 'food') onOpenFood(record.id);
               }}
             >
+              {record.image ? (
+                <Image source={record.image} style={styles.favoriteImage} />
+              ) : (
+                <View style={styles.favoriteFallbackIcon}>
+                  <Heart color={colors.primary} size={20} />
+                </View>
+              )}
               <View style={styles.flexOne}>
                 <Text style={styles.favoriteName}>{record.title}</Text>
                 <Text style={styles.favoriteSub}>{record.subtitle}</Text>
@@ -2946,24 +3436,51 @@ function HistoryScreen({
 function AccountScreen({
   authSession,
   settings,
+  currentLanguage,
+  qrBusy,
+  qrImageUri,
+  qrMobileStatus,
+  qrStatusText,
+  scannerBusy,
   onSignIn,
   onSignOut,
+  onOpenQrScanner,
   onOpenSettings,
   onOpenLanguage,
+  onOpenPrivacyPolicy,
+  onOpenLocalHelperOnboarding,
+  onOpenLocalHelperJobs,
+  onOpenLocalHelperEarnings,
+  onRefreshQrLogin,
   isGoogleAuthPending,
   canSignInWithGoogle,
   t,
 }: {
   authSession: AuthSessionState | null;
   settings: SettingsState;
+  currentLanguage: Language;
+  qrBusy: boolean;
+  qrImageUri: string | null;
+  qrMobileStatus: string | null;
+  qrStatusText: string;
+  scannerBusy: boolean;
   onSignIn: () => void;
   onSignOut: () => void;
+  onOpenQrScanner: () => void;
   onOpenSettings: () => void;
   onOpenLanguage: () => void;
+  onOpenPrivacyPolicy: () => void;
+  onOpenLocalHelperOnboarding: () => void;
+  onOpenLocalHelperJobs: () => void;
+  onOpenLocalHelperEarnings: () => void;
+  onRefreshQrLogin: () => void;
   isGoogleAuthPending: boolean;
   canSignInWithGoogle: boolean;
   t: (key: TranslationKey) => string;
 }) {
+  const isWeb = Platform.OS === 'web';
+  const VerificationIcon = authSession?.user.verifiedEmail ? Check : ShieldAlert;
+
   return (
     <ScrollView contentContainerStyle={styles.accountContent} showsVerticalScrollIndicator={false}>
       {authSession ? (
@@ -2980,6 +3497,19 @@ function AccountScreen({
           </View>
           <Text style={styles.accountName}>{authSession.user.name}</Text>
           <Text style={styles.accountEmail}>{authSession.user.email}</Text>
+          {!isWeb ? (
+            <View style={styles.qrMobilePanel}>
+              <PrimaryButton
+                label={scannerBusy ? t('account.qrApproving') : t('account.qrScanWeb')}
+                onPress={onOpenQrScanner}
+                disabled={scannerBusy}
+                icon={ScanLine}
+              />
+              {qrMobileStatus ? (
+                <Text style={styles.qrStatusText}>{qrMobileStatus}</Text>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       ) : (
         <View style={styles.accountHeader}>
@@ -2994,6 +3524,34 @@ function AccountScreen({
             disabled={!canSignInWithGoogle || isGoogleAuthPending}
             icon={User}
           />
+          {isWeb ? (
+            <View style={styles.qrLoginPanel}>
+              <View style={styles.qrPanelHeader}>
+                <QrCode color={colors.primary} size={20} />
+                <View style={styles.qrPanelCopy}>
+                  <Text style={styles.qrPanelTitle}>{t('account.qrWebTitle')}</Text>
+                  <Text style={styles.qrPanelBody}>{t('account.qrWebBody')}</Text>
+                </View>
+              </View>
+              <View style={styles.qrImageFrame}>
+                {qrImageUri ? (
+                  <Image source={{ uri: qrImageUri }} style={styles.qrImage} />
+                ) : (
+                  <ActivityIndicator color={colors.primary} />
+                )}
+              </View>
+              <Text style={styles.qrStatusText}>
+                {qrStatusText || t('account.qrWaiting')}
+              </Text>
+              <PrimaryButton
+                label={qrBusy ? t('account.qrRefreshing') : t('account.qrRefresh')}
+                onPress={onRefreshQrLogin}
+                disabled={qrBusy}
+                icon={RefreshCw}
+                variant="secondary"
+              />
+            </View>
+          ) : null}
         </View>
       )}
 
@@ -3014,8 +3572,25 @@ function AccountScreen({
           <ChevronRight color={colors.muted} size={18} />
         </View>
         <View style={styles.accountRow}>
+          <VerificationIcon
+            color={authSession?.user.verifiedEmail ? colors.primary : colors.muted}
+            size={20}
+          />
+          <Text style={styles.accountRowLabel}>{t('account.verification')}</Text>
+          <Text style={styles.accountRowValue}>
+            {authSession
+              ? authSession.user.verifiedEmail
+                ? t('account.verified')
+                : t('account.unverified')
+              : '—'}
+          </Text>
+          <ChevronRight color={colors.muted} size={18} />
+        </View>
+        <View style={styles.accountRow}>
           <Text style={styles.accountRowLabel}>{t('account.memberSince')}</Text>
-          <Text style={styles.accountRowValue}>2026-01</Text>
+          <Text style={styles.accountRowValue}>
+            {formatAccountMonth(authSession?.signedInAt)}
+          </Text>
           <ChevronRight color={colors.muted} size={18} />
         </View>
       </View>
@@ -3025,11 +3600,7 @@ function AccountScreen({
         <Pressable style={styles.accountRow} onPress={onOpenLanguage}>
           <Globe color={colors.primary} size={20} />
           <Text style={styles.accountRowLabel}>{t('settings.language.title')}</Text>
-          <Text style={styles.accountRowValue}>
-            {settings.themeMode === 'light'
-              ? t('settings.value.light')
-              : t('settings.value.dark')}
-          </Text>
+          <Text style={styles.accountRowValue}>{languageNativeNames[currentLanguage]}</Text>
           <ChevronRight color={colors.muted} size={18} />
         </Pressable>
       </View>
@@ -3040,7 +3611,22 @@ function AccountScreen({
           <Text style={styles.accountRowLabel}>{t('account.settings')}</Text>
           <ChevronRight color={colors.muted} size={18} />
         </Pressable>
-        <Pressable style={styles.accountRow}>
+        <Pressable style={styles.accountRow} onPress={onOpenLocalHelperOnboarding}>
+          <UserCircle color={colors.primary} size={20} />
+          <Text style={styles.accountRowLabel}>Become a Local Helper</Text>
+          <ChevronRight color={colors.muted} size={18} />
+        </Pressable>
+        <Pressable style={styles.accountRow} onPress={onOpenLocalHelperJobs}>
+          <MapPin color={colors.primary} size={20} />
+          <Text style={styles.accountRowLabel}>Local Helper Jobs</Text>
+          <ChevronRight color={colors.muted} size={18} />
+        </Pressable>
+        <Pressable style={styles.accountRow} onPress={onOpenLocalHelperEarnings}>
+          <DollarSign color={colors.primary} size={20} />
+          <Text style={styles.accountRowLabel}>Earnings</Text>
+          <ChevronRight color={colors.muted} size={18} />
+        </Pressable>
+        <Pressable style={styles.accountRow} onPress={onOpenPrivacyPolicy}>
           <Info color={colors.primary} size={20} />
           <Text style={styles.accountRowLabel}>{t('account.privacy')}</Text>
           <ChevronRight color={colors.muted} size={18} />
@@ -3068,6 +3654,7 @@ function AccountScreen({
 }
 
 function SearchScreen({
+  places: placeItems,
   recentSearches,
   onSubmitSearch,
   onClearRecent,
@@ -3075,6 +3662,7 @@ function SearchScreen({
   onOpenFood,
   t,
 }: {
+  places: Place[];
   recentSearches: RecentSearch[];
   onSubmitSearch: (query: string) => void;
   onClearRecent: () => void;
@@ -3084,19 +3672,21 @@ function SearchScreen({
 }) {
   const [query, setQuery] = useState('');
   const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = normalizeSearchText(query.trim());
     if (q.length === 0) {
-      return { places: popularPlaceIds.map((id) => places.find((p) => p.id === id)).filter(Boolean) as Place[], foods: popularFoodIds.map((id) => foods.find((f) => f.id === id)).filter(Boolean) as Food[] };
+      return { places: popularPlaceIds.map((id) => placeItems.find((p) => p.id === id)).filter(Boolean) as Place[], foods: popularFoodIds.map((id) => foods.find((f) => f.id === id)).filter(Boolean) as Food[] };
     }
     return {
-      places: places.filter((p) =>
-        `${p.name} ${p.city} ${p.category} ${p.tags.join(' ')}`.toLowerCase().includes(q),
+      places: placeItems.filter((p) =>
+        normalizeSearchText(`${p.name} ${p.city} ${p.category} ${p.tags.join(' ')}`).includes(q),
       ),
       foods: foods.filter((f) =>
-        `${f.name} ${f.englishName} ${f.region}`.toLowerCase().includes(q),
+        normalizeSearchText(`${f.name} ${f.englishName} ${f.region}`).includes(q),
       ),
     };
-  }, [query]);
+  }, [placeItems, query]);
+  const { data: translatedResultPlaces } = useTranslatedData(results.places);
+  const { data: translatedResultFoods } = useTranslatedData(results.foods);
 
   return (
     <View style={styles.flexOne}>
@@ -3147,7 +3737,7 @@ function SearchScreen({
           <View style={styles.searchSection}>
             <Text style={styles.searchSectionTitle}>{t('search.suggestions')}</Text>
             <View style={styles.popularGrid}>
-              {results.places.slice(0, 4).map((place) => (
+              {translatedResultPlaces.slice(0, 4).map((place) => (
                 <Pressable
                   key={place.id}
                   style={styles.popularGridCard}
@@ -3174,7 +3764,7 @@ function SearchScreen({
                     <Text style={styles.searchSectionTitle}>
                       {t('search.popularPlaces')}
                     </Text>
-                    {results.places.map((place) => (
+                    {translatedResultPlaces.map((place) => (
                       <Pressable
                         key={place.id}
                         style={styles.searchResultRow}
@@ -3195,7 +3785,7 @@ function SearchScreen({
                     <Text style={styles.searchSectionTitle}>
                       {t('search.popularFoods')}
                     </Text>
-                    {results.foods.map((food) => (
+                    {translatedResultFoods.map((food) => (
                       <Pressable
                         key={food.id}
                         style={styles.searchResultRow}
@@ -3346,11 +3936,12 @@ function LanguageScreen({
             onPress={() => onSelect(language)}
           >
             <View style={styles.languageFlag}>
-              <Text style={styles.languageFlagText}>
-                {language === 'English' ? '🇬🇧' : '🇻🇳'}
-              </Text>
+              <Text style={styles.languageFlagText}>{languageFlags[language]}</Text>
             </View>
-            <Text style={styles.languageLabel}>{language}</Text>
+            <View style={styles.languageTextStack}>
+              <Text style={styles.languageLabel}>{languageNativeNames[language]}</Text>
+              <Text style={styles.languageSubLabel}>{languageSecondaryNames[language]}</Text>
+            </View>
             {current === language ? <Check color={colors.primary} size={20} /> : null}
           </Pressable>
         ))}
@@ -3483,24 +4074,55 @@ function OfflineScreen({ onRetry, t }: { onRetry: () => void; t: (key: Translati
 }
 
 function MapScreen({ place, onBack, t }: { place: Place | null; onBack: () => void; t: (key: TranslationKey) => string }) {
+  const { data: translatedPlace } = useTranslatedData(place);
+  const center = place ? { lat: place.lat, lng: place.lng } : { lat: 16.054, lng: 108.202 };
+  const zoom = place ? 14 : 5;
+  const mapHtml = buildOpenStreetMapHtml({
+    lat: center.lat,
+    lng: center.lng,
+    zoom,
+    title: translatedPlace?.name,
+    subtitle: translatedPlace?.category,
+    attribution: t('map.attribution'),
+    loading: t('map.loading'),
+    unavailable: t('map.unavailable'),
+  });
+
   return (
     <View style={styles.flexOne}>
       <View style={styles.mapHeader}>
         <IconButton icon={ArrowLeft} onPress={onBack} style={styles.headerBack} />
         <Text style={styles.mapHeaderTitle}>{t('map.title')}</Text>
       </View>
-      <View style={styles.mapBody}>
-        <View style={styles.mapPinStack}>
-          {place ? (
-            <>
+      <View style={styles.mapCanvasWrap}>
+        {Platform.OS === 'web' ? (
+          <iframe
+            title={t('map.title')}
+            srcDoc={mapHtml}
+            style={styles.mapIframe}
+          />
+        ) : (
+          <WebView
+            originWhitelist={['*']}
+            source={{ html: mapHtml }}
+            style={styles.mapCanvas}
+            javaScriptEnabled
+            domStorageEnabled
+          />
+        )}
+        <View style={styles.mapSheet}>
+          {place && translatedPlace ? (
+            <View style={styles.mapSheetContent}>
               <View style={styles.mapPin}><MapPin color={colors.primary} size={20} /></View>
-              <Text style={styles.mapPinName}>{place.name}</Text>
-              <Text style={styles.mapPinSub}>{place.lat.toFixed(3)}, {place.lng.toFixed(3)}</Text>
-              <Pressable style={styles.mapOpenButton} onPress={() => place && openInMaps(place)}>
+              <View style={styles.flexOne}>
+                <Text style={styles.mapPinName}>{translatedPlace.name}</Text>
+                <Text style={styles.mapPinSub}>{place.lat.toFixed(3)}, {place.lng.toFixed(3)}</Text>
+              </View>
+              <Pressable style={styles.mapOpenButton} onPress={() => openInMaps(place)}>
                 <Text style={styles.mapOpenText}>{t('map.openExternal')}</Text>
                 <ChevronRight color={colors.surface} size={16} />
               </Pressable>
-            </>
+            </View>
           ) : (
             <Text style={styles.mapSubtitle}>{t('map.subtitle')}</Text>
           )}
@@ -3681,6 +4303,75 @@ function ItineraryPreviewScreen({
   );
 }
 
+function ItineraryEmailScreen({
+  itinerary,
+  recipient,
+  subject,
+  body,
+  onChangeRecipient,
+  onChangeSubject,
+  onChangeBody,
+  onSend,
+  t,
+}: {
+  itinerary: ItineraryConfirmation;
+  recipient: string;
+  subject: string;
+  body: string;
+  onChangeRecipient: (value: string) => void;
+  onChangeSubject: (value: string) => void;
+  onChangeBody: (value: string) => void;
+  onSend: () => void;
+  t: (key: TranslationKey) => string;
+}) {
+  return (
+    <ScrollView contentContainerStyle={styles.emailFormContent} showsVerticalScrollIndicator={false}>
+      <View style={styles.emailHero}>
+        <View style={styles.emailEnvelope}>
+          <Mail color={colors.primary} size={42} />
+        </View>
+        <Text style={styles.emailHeroTitle}>{t('ai.emailFormTitle')}</Text>
+        <Text style={styles.emailHeroSubtitle}>{t('ai.emailIntro')}</Text>
+      </View>
+      <View style={styles.emailFieldGroup}>
+        <Text style={styles.emailLabel}>{t('ai.emailRecipient')}</Text>
+        <TextInput
+          value={recipient}
+          onChangeText={onChangeRecipient}
+          placeholder="example@email.com"
+          placeholderTextColor={colors.muted}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          style={styles.emailInput}
+        />
+      </View>
+      <View style={styles.emailFieldGroup}>
+        <Text style={styles.emailLabel}>{t('ai.emailSubject')}</Text>
+        <TextInput
+          value={subject}
+          onChangeText={onChangeSubject}
+          placeholder={`Vinago+ itinerary: ${itinerary.city}`}
+          placeholderTextColor={colors.muted}
+          style={styles.emailInput}
+        />
+      </View>
+      <View style={styles.emailFieldGroup}>
+        <Text style={styles.emailLabel}>{t('ai.emailBody')}</Text>
+        <TextInput
+          value={body}
+          onChangeText={onChangeBody}
+          placeholder={buildItineraryPreview(itinerary, 'vi')}
+          placeholderTextColor={colors.muted}
+          style={[styles.emailInput, styles.emailBodyInput]}
+          multiline
+          textAlignVertical="top"
+        />
+      </View>
+      <PrimaryButton label={t('ai.emailSend')} onPress={onSend} icon={Send} />
+    </ScrollView>
+  );
+}
+
 function ItineraryPdfScreen({
   itinerary,
   onShare,
@@ -3723,14 +4414,27 @@ function ItineraryPdfScreen({
  * ============================================================ */
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <TravelApp />
+    </SafeAreaProvider>
+  );
+}
+
+function TravelApp() {
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const isWide = width >= 900;
+  const mobileBottomInset = isWide ? 0 : Math.max(insets.bottom, 0);
+  const bottomNavHeight = 64 + mobileBottomInset;
+  const emailStatusBottom = isWide ? 16 : bottomNavHeight + 12;
   const [isBooting, setIsBooting] = useState(true);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [draftProfile, setDraftProfile] = useState<UserProfile>(defaultProfile);
   const [activeTab, setActiveTab] = useState<TabId>('home');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCity, setSelectedCity] = useState<City | 'All'>('All');
+  const [placesCatalog, setPlacesCatalog] = useState<Place[]>(places);
   const [selectedPlaceId, setSelectedPlaceId] = useState(places[0].id);
   const [selectedFoodId, setSelectedFoodId] = useState(foods[0].id);
   const [favorites, setFavorites] = useState<SavedItem[]>([]);
@@ -3739,37 +4443,46 @@ export default function App() {
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
   const [settings, setSettings] = useState<SettingsState>(defaultSettings);
   const [isGoogleAuthPending, setIsGoogleAuthPending] = useState(false);
-  const [googleIdToken, setGoogleIdToken] = useState<string | null>(null);
+  const [qrSession, setQrSession] = useState<QrLoginSession | null>(null);
+  const [qrImageUri, setQrImageUri] = useState<string | null>(null);
+  const [qrBusy, setQrBusy] = useState(false);
+  const [qrStatusText, setQrStatusText] = useState('');
+  const [qrMobileStatus, setQrMobileStatus] = useState<string | null>(null);
+  const [scannerVisible, setScannerVisible] = useState(false);
+  const [scannerBusy, setScannerBusy] = useState(false);
   const [lastItinerary, setLastItinerary] = useState<ItineraryConfirmation | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [tripDays, setTripDays] = useState(2);
   const [tripStyle, setTripStyle] = useState<TripStyle>('Culture + Food');
   const [emailStatus, setEmailStatus] = useState<string | null>(null);
+  const [emailRecipient, setEmailRecipient] = useState('');
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
   const [pendingPlaceId, setPendingPlaceId] = useState<string | null>(null);
   const [pendingFoodId, setPendingFoodId] = useState<string | null>(null);
   const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isPlacesDatabaseReady, setIsPlacesDatabaseReady] = useState(false);
+  const [livePreviewRequest, setLivePreviewRequest] = useState<LivePreviewRequest | null>(null);
+  const [livePreviewRole, setLivePreviewRole] = useState<LivePreviewActorRole>('traveler');
+  const [livePreviewError, setLivePreviewError] = useState<string | null>(null);
+  const [isLivePreviewSubmitting, setIsLivePreviewSubmitting] = useState(false);
+  const [localHelperProfile, setLocalHelperProfile] = useState<LocalHelperProfile | null>(null);
+  const [localHelperJobs, setLocalHelperJobs] = useState<LocalHelperJob[]>([]);
+  const [selectedLocalHelperJob, setSelectedLocalHelperJob] = useState<LocalHelperJob | null>(null);
+  const [localHelperEarnings, setLocalHelperEarnings] = useState<LocalHelperEarning[]>([]);
   const didTrackAppOpenRef = useRef(false);
   const didTrackOnboardingRef = useRef(false);
   const previousScreenRef = useRef<TabId | null>(null);
-  const processedGoogleResponseRef = useRef<string | null>(null);
+  const guestUserIdRef = useRef(`guest_${Math.random().toString(36).slice(2, 10)}`);
+  const scannedQrRef = useRef<string | null>(null);
 
   const currentProfile = profile ?? draftProfile;
   const locale = getLocale(currentProfile.language);
   const t = (key: TranslationKey): string => translate(locale, key);
-
-  const googleRedirectUri = AuthSession.makeRedirectUri({
-    scheme: APP_SCHEME,
-    path: 'oauthredirect',
-    native: `${APP_SCHEME}:/oauthredirect`,
-  });
-
-  const [googleRequest, googleResponse, promptGoogleSignIn] = Google.useIdTokenAuthRequest({
-    ...googleOAuthConfig,
-    redirectUri: googleRedirectUri,
-    selectAccount: true,
-    scopes: ['openid', 'profile', 'email'],
-  });
+  const currentUserId = authSession?.user.id ?? guestUserIdRef.current;
+  const currentUserName = authSession?.user.name ?? 'Guest traveler';
+  const currentUserEmail = authSession?.user.email ?? '';
 
   const recordActivity = (type: ActivityHistoryType, title: string, detail?: string) => {
     setActivityHistory((current) =>
@@ -3804,34 +4517,110 @@ export default function App() {
     });
   };
 
+  async function refreshQrLoginSession() {
+    if (Platform.OS !== 'web' || authSession) return;
+
+    setQrBusy(true);
+    try {
+      const nextSession = await createQrLoginSession();
+      const imageUri = await qrLoginDataUrl(nextSession.qrData);
+      setQrSession(nextSession);
+      setQrImageUri(imageUri);
+      setQrStatusText(t('account.qrWaiting'));
+    } catch (error) {
+      setQrStatusText(error instanceof Error ? error.message : t('account.qrCreateFailed'));
+      setQrSession(null);
+      setQrImageUri(null);
+    } finally {
+      setQrBusy(false);
+    }
+  }
+
+  async function getFreshAccountIdToken(interactive = false) {
+    if (Platform.OS === 'web') return null;
+    return getAccountIdToken(interactive);
+  }
+
+  async function saveApprovedQrWebSession(
+    result: Extract<QrLoginPollResult, { status: 'approved' }>,
+  ) {
+    await AsyncStorage.setItem(QR_WEB_SESSION_KEY, result.sessionToken);
+    const now = new Date().toISOString();
+    setAuthSession(authSessionFromQrUser(result.user, now));
+    setQrSession(null);
+    setQrImageUri(null);
+    setQrStatusText('');
+    setEmailStatus(null);
+    recordActivity('auth', 'Signed in with mobile QR', result.user.email);
+  }
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadPlacesCatalog = async () => {
+      try {
+        const records = await loadTravelPlacesFromDatabase();
+        if (isMounted && records.length > 0) {
+          setPlacesCatalog(createPlaceModels(records));
+        }
+      } catch {
+        if (isMounted) {
+          setPlacesCatalog(places);
+        }
+      } finally {
+        if (isMounted) {
+          setIsPlacesDatabaseReady(true);
+        }
+      }
+    };
+
+    void loadPlacesCatalog();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   /* boot */
   useEffect(() => {
     const loadLocalState = async () => {
       try {
-        const [storedProfile, storedFavorites, storedAuthSession, storedActivity, storedRecent, storedSettings] =
+        const [
+          storedProfile,
+          storedFavorites,
+          storedActivity,
+          storedRecent,
+          storedSettings,
+          storedQrWebSession,
+        ] =
           await Promise.all([
             AsyncStorage.getItem(PROFILE_KEY),
             AsyncStorage.getItem(FAVORITES_KEY),
-            AsyncStorage.getItem(AUTH_SESSION_KEY),
             AsyncStorage.getItem(ACTIVITY_HISTORY_KEY),
             AsyncStorage.getItem(RECENT_SEARCHES_KEY),
             AsyncStorage.getItem(SETTINGS_KEY),
+            AsyncStorage.getItem(QR_WEB_SESSION_KEY),
           ]);
 
         if (storedProfile) {
-          const parsed = JSON.parse(storedProfile) as UserProfile;
+          const parsed = normalizeProfile(JSON.parse(storedProfile) as UserProfile);
           setProfile(parsed);
           setDraftProfile(parsed);
           setSelectedCity(parsed.currentCity);
         }
         if (storedFavorites) setFavorites(JSON.parse(storedFavorites) as SavedItem[]);
-        if (storedAuthSession) {
-          const parsedAuth = JSON.parse(storedAuthSession) as AuthSessionState;
-          setAuthSession({ ...parsedAuth, lastSeenAt: new Date().toISOString() });
-        }
+        if (Platform.OS !== 'web') void AsyncStorage.removeItem(LEGACY_AUTH_SESSION_KEY);
         if (storedActivity) setActivityHistory(JSON.parse(storedActivity) as ActivityHistoryEntry[]);
         if (storedRecent) setRecentSearches(JSON.parse(storedRecent) as RecentSearch[]);
         if (storedSettings) setSettings({ ...defaultSettings, ...(JSON.parse(storedSettings) as SettingsState) });
+        if (Platform.OS === 'web' && storedQrWebSession) {
+          try {
+            const verified = await verifyQrWebSession(storedQrWebSession);
+            setAuthSession(authSessionFromQrUser(verified.user));
+          } catch {
+            setAuthSession(null);
+            await AsyncStorage.multiRemove([QR_WEB_SESSION_KEY, LEGACY_AUTH_SESSION_KEY]);
+          }
+        }
       } catch {
         setProfile(null);
       } finally {
@@ -3843,13 +4632,41 @@ export default function App() {
 
   useEffect(() => { void AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites)); }, [favorites]);
   useEffect(() => {
+    if (Platform.OS === 'web') return undefined;
+
+    return observeAccountAuth((accountUser) => {
+      if (!accountUser) {
+        setAuthSession(null);
+        return;
+      }
+
+      const now = new Date().toISOString();
+      setAuthSession((current) => {
+        const signedInAt =
+          current?.provider === 'google' && current.user.id === accountUser.id
+            ? current.signedInAt
+            : now;
+        return authSessionFromAccountUser(accountUser, signedInAt, now);
+      });
+      setQrMobileStatus(null);
+      setEmailStatus(null);
+    });
+  }, []);
+  useEffect(() => {
+    let isMounted = true;
+    const loadHelperProfile = async () => {
+      const helperProfile = await localHelperService.getProfile(currentUserId);
+      if (isMounted) setLocalHelperProfile(helperProfile);
+    };
+    void loadHelperProfile();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUserId]);
+  useEffect(() => {
     if (isBooting) return;
-    if (authSession) {
-      void AsyncStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(authSession));
-    } else {
-      void AsyncStorage.removeItem(AUTH_SESSION_KEY);
-    }
-  }, [authSession, isBooting]);
+    void AsyncStorage.removeItem(LEGACY_AUTH_SESSION_KEY);
+  }, [isBooting]);
   useEffect(() => {
     if (isBooting) return;
     void AsyncStorage.setItem(ACTIVITY_HISTORY_KEY, JSON.stringify(activityHistory));
@@ -3886,88 +4703,96 @@ export default function App() {
     );
   }, [locale]);
 
-  /* google sign-in response */
   useEffect(() => {
-    if (!googleResponse) return;
-    const fingerprint =
-      googleResponse.type === 'success' || googleResponse.type === 'error'
-        ? `${googleResponse.type}-${googleResponse.url ?? googleResponse.errorCode ?? ''}`
-        : googleResponse.type;
-    if (processedGoogleResponseRef.current === fingerprint) return;
-    processedGoogleResponseRef.current = fingerprint;
+    if (Platform.OS !== 'web' || isBooting || authSession) return undefined;
+    void refreshQrLoginSession();
+    return undefined;
+  }, [authSession, isBooting]);
 
-    if (googleResponse.type !== 'success') {
-      setIsGoogleAuthPending(false);
-      if (googleResponse.type === 'error') {
-        recordActivity('auth', 'Google sign-in failed', googleResponse.error?.message ?? 'Google returned an error.');
-        void trackEvent('google_sign_in_failed', { error_code: googleResponse.errorCode, source_screen: activeTab }, currentProfile);
-      }
-      return;
-    }
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !qrSession || authSession) return undefined;
 
-    const completeGoogleSignIn = async () => {
-      const accessToken =
-        googleResponse.authentication?.accessToken ?? googleResponse.params.access_token;
-      const idToken =
-        googleResponse.authentication?.idToken ?? googleResponse.params.id_token;
-
-      if (!accessToken && !idToken) {
-        setIsGoogleAuthPending(false);
-        recordActivity('auth', 'Google sign-in failed', 'Google did not return an auth token.');
-        void trackEvent('google_sign_in_failed', { error_code: 'missing_auth_token', source_screen: activeTab }, currentProfile);
-        return;
-      }
-
+    let cancelled = false;
+    const poll = async () => {
       try {
-        const userInfo = idToken
-          ? decodeJwtPayload(idToken)
-          : await AuthSession.fetchUserInfoAsync(
-              { accessToken: accessToken ?? '' },
-              Google.discovery,
-            );
-        const googleUser = normalizeGoogleUser(userInfo);
-        setGoogleIdToken(idToken ?? null);
-        const now = new Date().toISOString();
-        setAuthSession({ provider: 'google', user: googleUser, signedInAt: now, lastSeenAt: now });
-        setEmailStatus(null);
-        recordActivity('auth', 'Signed in with Google', googleUser.email);
-        void trackEvent('google_sign_in_completed', { source_screen: activeTab, email_domain: getEmailDomain(googleUser.email), verified_email: googleUser.verifiedEmail }, currentProfile);
-      } catch {
-        recordActivity('auth', 'Google sign-in failed', 'Could not load the Google profile.');
-        void trackEvent('google_sign_in_failed', { error_code: 'profile_fetch_failed', source_screen: activeTab }, currentProfile);
-      } finally {
-        setIsGoogleAuthPending(false);
+        const result = await pollQrLoginSession(qrSession.sessionId, qrSession.pollToken);
+        if (cancelled) return;
+
+        if (result.status === 'approved') {
+          await saveApprovedQrWebSession(result);
+          return;
+        }
+
+        if (result.status === 'expired') {
+          setQrStatusText(t('account.qrExpired'));
+          setQrSession(null);
+          setQrImageUri(null);
+          await refreshQrLoginSession();
+          return;
+        }
+
+        setQrStatusText(t('account.qrWaiting'));
+      } catch (error) {
+        if (!cancelled) {
+          setQrStatusText(error instanceof Error ? error.message : t('account.qrCheckFailed'));
+        }
       }
     };
-    void completeGoogleSignIn();
-  }, [activeTab, currentProfile, googleResponse]);
+
+    const timer = setInterval(() => {
+      void poll();
+    }, 2000);
+    void poll();
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [authSession, qrSession]);
 
   /* derived data */
-  const selectedPlace = places.find((p) => p.id === selectedPlaceId) ?? places[0];
+  const selectedPlace = placesCatalog.find((p) => p.id === selectedPlaceId) ?? placesCatalog[0] ?? places[0];
   const selectedFood = foods.find((f) => f.id === selectedFoodId) ?? foods[0];
-  const searchNeedle = searchTerm.trim().toLowerCase();
+  const searchNeedle = normalizeSearchText(searchTerm.trim());
+  const selectedProfileCities = useMemo(
+    () => getSelectedCities(currentProfile),
+    [currentProfile],
+  );
+  const selectedProfileCitySet = useMemo(
+    () => new Set(selectedProfileCities),
+    [selectedProfileCities],
+  );
+  const availablePlaceCities = useMemo(
+    () =>
+      cities.filter(
+        (city) => city !== 'Other' && placesCatalog.some((place) => place.city === city),
+      ),
+    [placesCatalog],
+  );
   const filteredPlaces = useMemo(() => {
-    return places.filter((place) => {
-      const matchesCity = selectedCity === 'All' || place.city === selectedCity;
+    return placesCatalog.filter((place) => {
+      const matchesCity =
+        selectedCity === 'All'
+          ? true
+          : place.city === selectedCity;
       const matchesSearch =
         searchNeedle.length === 0 ||
-        `${place.name} ${place.city} ${place.category} ${place.tags.join(' ')}`
-          .toLowerCase()
+        normalizeSearchText(`${place.name} ${place.city} ${place.category} ${place.tags.join(' ')}`)
           .includes(searchNeedle);
       return matchesCity && matchesSearch;
     });
-  }, [selectedCity, searchNeedle]);
+  }, [placesCatalog, selectedCity, searchNeedle]);
 
   const favoriteRecords = useMemo(() => {
     return favorites
       .map((favorite) => {
         if (favorite.type === 'place') {
-          const item = places.find((p) => p.id === favorite.id);
-          return item ? { key: `${favorite.type}-${favorite.id}`, type: favorite.type, id: favorite.id, title: item.name, subtitle: item.city } : null;
+          const item = placesCatalog.find((p) => p.id === favorite.id);
+          return item ? { key: `${favorite.type}-${favorite.id}`, type: favorite.type, id: favorite.id, title: item.name, subtitle: item.city, image: item.image } : null;
         }
         if (favorite.type === 'food') {
           const item = foods.find((f) => f.id === favorite.id);
-          return item ? { key: `${favorite.type}-${favorite.id}`, type: favorite.type, id: favorite.id, title: item.name, subtitle: item.englishName } : null;
+          return item ? { key: `${favorite.type}-${favorite.id}`, type: favorite.type, id: favorite.id, title: item.name, subtitle: item.englishName, image: item.image } : null;
         }
         if (favorite.type === 'phrase') {
           const item = phrases.find((p) => p.id === favorite.id);
@@ -3976,13 +4801,29 @@ export default function App() {
         const item = cultureTopics.find((c) => c.id === favorite.id);
         return item ? { key: `${favorite.type}-${favorite.id}`, type: favorite.type, id: favorite.id, title: item.title, subtitle: item.category } : null;
       })
-      .filter(Boolean) as { key: string; type: SavedItemType; id: string; title: string; subtitle: string }[];
-  }, [favorites]);
+      .filter(Boolean) as {
+        key: string;
+        type: SavedItemType;
+        id: string;
+        title: string;
+        subtitle: string;
+        image?: ImageSourcePropType;
+      }[];
+  }, [favorites, placesCatalog]);
 
-  const popularPlaces = useMemo(
-    () => popularPlaceIds.map((id) => places.find((p) => p.id === id)).filter(Boolean) as Place[],
-    [],
-  );
+  const popularPlaces = useMemo(() => {
+    const preferredPlaces = popularPlaceIds
+      .map((id) => placesCatalog.find((place) => place.id === id))
+      .filter((place): place is Place => Boolean(place));
+    const remainingPlaces = placesCatalog.filter(
+      (place) => !preferredPlaces.some((preferredPlace) => preferredPlace.id === place.id),
+    );
+    return [...preferredPlaces, ...remainingPlaces].slice(0, 8);
+  }, [placesCatalog]);
+  const nearbyPlaces = useMemo(() => {
+    const selectedPlaces = placesCatalog.filter((place) => selectedProfileCitySet.has(place.city));
+    return (selectedPlaces.length > 0 ? selectedPlaces : popularPlaces).slice(0, 4);
+  }, [placesCatalog, popularPlaces, selectedProfileCitySet]);
   const popularFoods = useMemo(
     () => popularFoodIds.map((id) => foods.find((f) => f.id === id)).filter(Boolean) as Food[],
     [],
@@ -3990,12 +4831,14 @@ export default function App() {
 
   /* handlers */
   const saveProfile = () => {
-    void AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(draftProfile));
-    setProfile(draftProfile);
-    setSelectedCity(draftProfile.currentCity);
+    const profileToSave = normalizeProfile(draftProfile);
+    void AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profileToSave));
+    setProfile(profileToSave);
+    setDraftProfile(profileToSave);
+    setSelectedCity(profileToSave.currentCity);
     setActiveTab('home');
-    recordActivity('profile', 'Completed travel profile', `${draftProfile.currentCity} · ${draftProfile.tripDays} days`);
-    void trackEvent('onboarding_completed', { screen_name: 'onboarding' }, draftProfile);
+    recordActivity('profile', 'Completed travel profile', `${getSelectedCitiesLabel(profileToSave)} · ${profileToSave.tripDays} days`);
+    void trackEvent('onboarding_completed', { screen_name: 'onboarding', selected_cities: getSelectedCitiesLabel(profileToSave) }, profileToSave);
   };
 
   const resetOnboarding = () => {
@@ -4025,26 +4868,111 @@ export default function App() {
   };
 
   const signInWithGoogle = async () => {
-    if (!googleRequest || isGoogleAuthPending) return;
+    if (isGoogleAuthPending) return;
+    if (Platform.OS === 'web') return;
+
     setIsGoogleAuthPending(true);
     recordActivity('auth', 'Started Google sign-in', Platform.OS);
-    void trackEvent('google_sign_in_started', { source_screen: activeTab, redirect_uri: googleRedirectUri }, currentProfile);
+    void trackEvent('google_sign_in_started', {
+      source_screen: activeTab,
+      redirect_uri: 'firebase_google_sign_in',
+    }, currentProfile);
+
     try {
-      await promptGoogleSignIn();
-    } catch {
+      const accountUser = await signInWithGoogleAccount();
+      if (!accountUser) {
+        setIsGoogleAuthPending(false);
+        return;
+      }
+
+      const now = new Date().toISOString();
+      setAuthSession(authSessionFromAccountUser(accountUser, now));
+      setQrMobileStatus(null);
+      setEmailStatus(null);
+      void AsyncStorage.removeItem(QR_WEB_SESSION_KEY);
+      recordActivity('auth', 'Signed in with Google', accountUser.email);
+      void trackEvent('google_sign_in_completed', {
+        source_screen: activeTab,
+        email_domain: getEmailDomain(accountUser.email),
+        verified_email: accountUser.verifiedEmail,
+      }, currentProfile);
+    } catch (error) {
+      const message = accountAuthErrorMessage(error);
+      setQrMobileStatus(message);
+      recordActivity('auth', 'Google sign-in failed', message);
+      void trackEvent('google_sign_in_failed', { error_code: 'firebase_google_sign_in_failed', source_screen: activeTab }, currentProfile);
+    } finally {
       setIsGoogleAuthPending(false);
-      recordActivity('auth', 'Google sign-in failed', 'Could not open the Google sign-in window.');
-      void trackEvent('google_sign_in_failed', { error_code: 'prompt_failed', source_screen: activeTab }, currentProfile);
     }
   };
 
   const signOutGoogle = () => {
     const email = authSession?.user.email;
     setAuthSession(null);
-    setGoogleIdToken(null);
+    setQrSession(null);
+    setQrImageUri(null);
+    setQrStatusText('');
+    setQrMobileStatus(null);
     setEmailStatus(null);
+    void AsyncStorage.removeItem(QR_WEB_SESSION_KEY);
+    void signOutAccount().catch(() => undefined);
     recordActivity('auth', 'Signed out of Google', email);
     void trackEvent('google_signed_out', { source_screen: activeTab, email_domain: email ? getEmailDomain(email) : undefined }, currentProfile);
+  };
+
+  const openQrScanner = async () => {
+    if (Platform.OS === 'web') return;
+
+    let token: string | null = null;
+    try {
+      token = await getFreshAccountIdToken(true);
+    } catch (error) {
+      setQrMobileStatus(accountAuthErrorMessage(error));
+      return;
+    }
+
+    if (!authSession) {
+      setQrMobileStatus(t('account.qrMobileNeedLogin'));
+      return;
+    }
+    if (!token) {
+      setQrMobileStatus(t('account.qrMobileNeedToken'));
+      return;
+    }
+
+    const granted = await requestQrScannerPermission();
+    if (!granted) {
+      setQrMobileStatus(t('account.qrCameraDenied'));
+      return;
+    }
+
+    scannedQrRef.current = null;
+    setQrMobileStatus(t('account.qrMobileReady'));
+    setScannerVisible(true);
+  };
+
+  const handleQrScanned = async (data: string) => {
+    if (scannerBusy || scannedQrRef.current === data) return;
+    scannedQrRef.current = data;
+    setScannerBusy(true);
+
+    try {
+      const idToken = await getFreshAccountIdToken(true);
+      if (!idToken) {
+        throw new Error(t('account.qrMobileNeedToken'));
+      }
+      const payload = parseQrLoginPayload(data);
+      await approveQrLoginSession(payload, idToken);
+      setScannerVisible(false);
+      setQrMobileStatus(t('account.qrMobileSignedIn'));
+      recordActivity('auth', 'Approved web QR login', authSession?.user.email);
+    } catch (error) {
+      scannedQrRef.current = null;
+      setScannerVisible(false);
+      setQrMobileStatus(error instanceof Error ? error.message : t('account.qrCheckFailed'));
+    } finally {
+      setScannerBusy(false);
+    }
   };
 
   const clearActivityHistory = () => {
@@ -4062,7 +4990,7 @@ export default function App() {
   const askAi = (question: string): string | null => {
     const trimmed = question.trim();
     if (!trimmed) return null;
-    const answer = buildAiAnswer(trimmed, currentProfile, tripDays, tripStyle, locale);
+    const answer = buildAiAnswer(trimmed, currentProfile, tripDays, tripStyle, locale, placesCatalog);
     setMessages((current) => [
       ...current,
       { id: `${Date.now()}-user`, from: 'user', text: trimmed },
@@ -4088,6 +5016,13 @@ export default function App() {
     void trackEvent('tab_opened', { tab_id: tab, source_screen: activeTab }, currentProfile);
   };
 
+  const openTabFromHome = (tab: TabId) => {
+    if (tab === 'explore') {
+      setSelectedCity('All');
+    }
+    changeTab(tab);
+  };
+
   const changeExploreCity = (city: City | 'All') => {
     setSelectedCity(city);
     recordActivity('filter', 'Changed city filter', city);
@@ -4098,7 +5033,7 @@ export default function App() {
     setSelectedPlaceId(id);
     setPendingPlaceId(id);
     setActiveTab('place_detail');
-    const item = places.find((p) => p.id === id);
+    const item = placesCatalog.find((p) => p.id === id);
     recordActivity('content', 'Opened place', item ? `${item.name} · ${item.city}` : id);
     void trackEvent('place_opened', { place_id: id, place_name: item?.name, place_city: item?.city, place_category: item?.category, source_screen: sourceScreen }, currentProfile);
   };
@@ -4118,18 +5053,281 @@ export default function App() {
     void trackEvent('screen_view', { screen_name: 'map' }, currentProfile);
   };
 
+  const getTravelerActor = (): LivePreviewActor => ({
+    id: currentUserId,
+    name: currentUserName,
+    role: 'traveler',
+  });
+
+  const getHelperActor = (): LivePreviewActor => ({
+    id: currentUserId,
+    name: localHelperProfile?.fullName ?? currentUserName,
+    role: 'helper',
+  });
+
+  const openLivePreviewRequest = () => {
+    setLivePreviewError(null);
+    setLivePreviewRole('traveler');
+    setActiveTab('live_preview_request');
+    recordActivity('navigation', 'Opened live preview request', selectedPlace.name);
+  };
+
+  const createLivePreviewRequest = async (input: { requestedLanguage: string; note: string }) => {
+    setIsLivePreviewSubmitting(true);
+    setLivePreviewError(null);
+    const traveler = getTravelerActor();
+    try {
+      const request = await livePreviewService.createPaidRequest(
+        {
+          placeId: selectedPlace.id,
+          placeName: selectedPlace.name,
+          city: selectedPlace.city,
+          lat: selectedPlace.lat,
+          lng: selectedPlace.lng,
+          travelerId: traveler.id,
+          travelerName: traveler.name,
+          requestedLanguage: input.requestedLanguage,
+          note: input.note,
+        },
+        traveler,
+      );
+      setLivePreviewRequest(request);
+      setLivePreviewRole('traveler');
+      setActiveTab('live_preview_waiting');
+      recordActivity('content', 'Requested live preview', `${request.placeName} · escrowed`);
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not create live preview request');
+    } finally {
+      setIsLivePreviewSubmitting(false);
+    }
+  };
+
+  const refreshLivePreviewRequest = async () => {
+    if (!livePreviewRequest) return;
+    setLivePreviewError(null);
+    try {
+      const request = await livePreviewService.getRequest(livePreviewRequest.id);
+      if (request) setLivePreviewRequest(request);
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not refresh request');
+    }
+  };
+
+  const joinLivePreviewCall = async () => {
+    if (!livePreviewRequest) return;
+    setLivePreviewError(null);
+    try {
+      const actor = livePreviewRole === 'helper' ? getHelperActor() : getTravelerActor();
+      const request = await livePreviewService.startCall(livePreviewRequest.id, actor);
+      setLivePreviewRequest(request);
+      setActiveTab('live_call_room');
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not join live call');
+    }
+  };
+
+  const endLivePreviewCall = async (durationSeconds: number) => {
+    if (!livePreviewRequest) return;
+    setLivePreviewError(null);
+    try {
+      const actor = livePreviewRole === 'helper' ? getHelperActor() : getTravelerActor();
+      const request = await livePreviewService.endCall(livePreviewRequest.id, actor, durationSeconds);
+      setLivePreviewRequest(request);
+      setActiveTab('live_preview_completion');
+      void refreshLocalHelperEarnings();
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not end live call');
+    }
+  };
+
+  const confirmLivePreviewCompletion = async () => {
+    if (!livePreviewRequest) return;
+    setLivePreviewError(null);
+    try {
+      const request = await livePreviewService.confirmCompletion(livePreviewRequest.id, getTravelerActor());
+      setLivePreviewRequest(request);
+      recordActivity('content', 'Confirmed live preview completion', request.placeName);
+      void refreshLocalHelperEarnings();
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not confirm completion');
+    }
+  };
+
+  const disputeLivePreviewRequest = async () => {
+    if (!livePreviewRequest) return;
+    setLivePreviewError(null);
+    try {
+      const request = await livePreviewService.disputeRequest(livePreviewRequest.id, getTravelerActor());
+      setLivePreviewRequest(request);
+      recordActivity('content', 'Disputed live preview', request.placeName);
+      void refreshLocalHelperEarnings();
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not report problem');
+    }
+  };
+
+  const cancelLivePreviewRequest = async () => {
+    if (!livePreviewRequest) return;
+    setLivePreviewError(null);
+    try {
+      const request = await livePreviewService.cancelRequest(livePreviewRequest.id, getTravelerActor());
+      setLivePreviewRequest(request);
+      recordActivity('content', 'Cancelled live preview', request.placeName);
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not cancel request');
+    }
+  };
+
+  const saveLivePreviewRating = (rating: number, comment: string) => {
+    if (!livePreviewRequest) return;
+    recordActivity('content', 'Rated local helper', `${livePreviewRequest.placeName} · ${rating}/5 ${comment.trim()}`);
+    setEmailStatus('Thanks for rating your local helper.');
+  };
+
+  const saveLocalHelperProfile = async (input: SaveLocalHelperProfileInput) => {
+    setLivePreviewError(null);
+    try {
+      const helperProfile = await localHelperService.saveProfile({
+        ...input,
+        userId: currentUserId,
+        email: input.email || currentUserEmail,
+      });
+      setLocalHelperProfile(helperProfile);
+      recordActivity('profile', 'Saved local helper profile', helperProfile.city);
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not save helper profile');
+      throw error;
+    }
+  };
+
+  const setLocalHelperOnline = async (input: {
+    isOnline: boolean;
+    currentLat: number | null;
+    currentLng: number | null;
+  }) => {
+    setLivePreviewError(null);
+    try {
+      const helperProfile = await localHelperService.setOnline({
+        userId: currentUserId,
+        isOnline: input.isOnline,
+        currentLat: input.currentLat,
+        currentLng: input.currentLng,
+      });
+      setLocalHelperProfile(helperProfile);
+      recordActivity('profile', input.isOnline ? 'Enabled local helper mode' : 'Disabled local helper mode', helperProfile.city);
+      if (input.isOnline) {
+        const jobs = await localHelperService.listNearbyJobs(helperProfile.userId);
+        setLocalHelperJobs(jobs);
+      }
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not update helper status');
+      throw error;
+    }
+  };
+
+  const refreshLocalHelperJobs = async (profileOverride?: LocalHelperProfile | null) => {
+    const helperProfile = profileOverride ?? localHelperProfile;
+    setLivePreviewError(null);
+    if (!helperProfile) {
+      setLocalHelperJobs([]);
+      return;
+    }
+    try {
+      const jobs = await localHelperService.listNearbyJobs(helperProfile.userId);
+      setLocalHelperJobs(jobs);
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not load helper jobs');
+    }
+  };
+
+  const openLocalHelperJobs = () => {
+    setActiveTab('local_helper_jobs');
+    void refreshLocalHelperJobs();
+  };
+
+  const acceptLocalHelperJob = async (job: LocalHelperJob) => {
+    if (!localHelperProfile) {
+      setLivePreviewError('Create a helper profile before accepting jobs');
+      setActiveTab('local_helper_onboarding');
+      return;
+    }
+
+    setLivePreviewError(null);
+    try {
+      const request = await localHelperService.acceptJob(job.request.id, localHelperProfile);
+      const acceptedJob = { ...job, request };
+      setSelectedLocalHelperJob(acceptedJob);
+      setLivePreviewRequest(request);
+      setLivePreviewRole('helper');
+      setActiveTab('local_helper_job_detail');
+      await refreshLocalHelperJobs(localHelperProfile);
+      recordActivity('content', 'Accepted live preview job', request.placeName);
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not accept job');
+    }
+  };
+
+  const openLocalHelperJobDetail = (job: LocalHelperJob) => {
+    setSelectedLocalHelperJob(job);
+    setLivePreviewRequest(job.request);
+    setLivePreviewRole('helper');
+    setActiveTab('local_helper_job_detail');
+  };
+
+  const joinLocalHelperJobCall = async () => {
+    const request = selectedLocalHelperJob?.request ?? livePreviewRequest;
+    if (!request) return;
+    setLivePreviewError(null);
+    setLivePreviewRole('helper');
+    try {
+      const updatedRequest = await livePreviewService.startCall(request.id, getHelperActor());
+      setLivePreviewRequest(updatedRequest);
+      setSelectedLocalHelperJob((current) =>
+        current && current.request.id === updatedRequest.id
+          ? { ...current, request: updatedRequest }
+          : current,
+      );
+      setActiveTab('live_call_room');
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not join live call');
+    }
+  };
+
+  const refreshLocalHelperEarnings = async () => {
+    setLivePreviewError(null);
+    if (!localHelperProfile) {
+      setLocalHelperEarnings([]);
+      return;
+    }
+    try {
+      const earnings = await localHelperService.listEarnings(localHelperProfile.userId);
+      setLocalHelperEarnings(earnings);
+    } catch (error) {
+      setLivePreviewError(error instanceof Error ? error.message : 'Could not load earnings');
+    }
+  };
+
+  const openLocalHelperEarnings = () => {
+    setActiveTab('local_helper_earnings');
+    void refreshLocalHelperEarnings();
+  };
+
   const buildItinerary = () => {
-    const prompt = `Create a ${tripDays} day ${tripStyle} itinerary for ${currentProfile.currentCity}.`;
-    const itinerary = createItineraryConfirmation(prompt, currentProfile, tripDays, tripStyle, locale);
+    const selectedCitiesLabel = getSelectedCitiesLabel(currentProfile);
+    const prompt = `Create a ${tripDays} day ${tripStyle} itinerary for ${selectedCitiesLabel}.`;
+    const itinerary = createItineraryConfirmation(prompt, currentProfile, tripDays, tripStyle, locale, placesCatalog);
     setLastItinerary(itinerary);
+    setEmailRecipient(authSession?.user.email ?? '');
+    setEmailSubject(`Lịch trình ${itinerary.days}N ${selectedCitiesLabel} - Vinago+`);
+    setEmailBody(buildItineraryPreview(itinerary, locale));
     setMessages((current) => [
       ...current,
       { id: `${Date.now()}-user`, from: 'user', text: prompt },
       { id: `${Date.now()}-assistant`, from: 'assistant', text: itinerary.body },
     ]);
     setActiveTab('itinerary_preview');
-    recordActivity('itinerary', 'Generated itinerary', `${tripDays} days · ${tripStyle} · ${currentProfile.currentCity}`);
-    void trackEvent('itinerary_generated', { trip_days: tripDays, trip_style: tripStyle, current_city: currentProfile.currentCity }, currentProfile);
+    recordActivity('itinerary', 'Generated itinerary', `${tripDays} days · ${tripStyle} · ${selectedCitiesLabel}`);
+    void trackEvent('itinerary_generated', { trip_days: tripDays, trip_style: tripStyle, current_city: currentProfile.currentCity, selected_cities: getSelectedCities(currentProfile).join(',') }, currentProfile);
   };
 
   const sendItineraryEmail = async () => {
@@ -4137,23 +5335,37 @@ export default function App() {
       setEmailStatus(t('ai.emailRequired'));
       return;
     }
-    const itinerary = lastItinerary ?? createItineraryConfirmation(`Create a ${tripDays} day ${tripStyle} itinerary for ${currentProfile.currentCity}.`, currentProfile, tripDays, tripStyle, locale);
+    const itinerary = lastItinerary ?? createItineraryConfirmation(`Create a ${tripDays} day ${tripStyle} itinerary for ${getSelectedCitiesLabel(currentProfile)}.`, currentProfile, tripDays, tripStyle, locale, placesCatalog);
     setLastItinerary(itinerary);
     setEmailStatus(null);
-    recordActivity('email', 'Requested itinerary email', authSession.user.email);
-    void trackEvent('itinerary_email_requested', { itinerary_days: itinerary.days, itinerary_style: itinerary.style, email_domain: getEmailDomain(authSession.user.email), delivery_mode: itineraryEmailEndpoint ? 'endpoint' : 'mail_composer' }, currentProfile);
+    const recipient = emailRecipient.trim() || authSession.user.email;
+    const subject = emailSubject.trim() || `Vinago+ itinerary confirmation: ${itinerary.title}`;
+    const messageBody =
+      emailBody.trim() || buildItineraryEmailBody(authSession.user.name, itinerary, currentProfile);
+    recordActivity('email', 'Requested itinerary email', recipient);
+    void trackEvent('itinerary_email_requested', { itinerary_days: itinerary.days, itinerary_style: itinerary.style, email_domain: getEmailDomain(recipient), delivery_mode: itineraryEmailEndpoint ? 'endpoint' : 'mail_composer' }, currentProfile);
 
     try {
-      if (itineraryEmailEndpoint && googleIdToken) {
+      const endpointGoogleIdToken = itineraryEmailEndpoint
+        ? await getFreshAccountIdToken(false)
+        : null;
+      if (itineraryEmailEndpoint && endpointGoogleIdToken) {
         const response = await fetch(itineraryEmailEndpoint, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${googleIdToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ to: authSession.user.email, name: authSession.user.name, itinerary, profile: currentProfile }),
+          headers: { Authorization: `Bearer ${endpointGoogleIdToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: recipient,
+            name: authSession.user.name,
+            subject,
+            body: messageBody,
+            itinerary,
+            profile: currentProfile,
+          }),
         });
         if (!response.ok) throw new Error(`Email endpoint failed with ${response.status}`);
         setEmailStatus(t('ai.emailSent'));
-        recordActivity('email', 'Sent itinerary confirmation', authSession.user.email);
-        void trackEvent('itinerary_email_sent', { itinerary_days: itinerary.days, delivery_mode: 'endpoint', email_domain: getEmailDomain(authSession.user.email) }, currentProfile);
+        recordActivity('email', 'Sent itinerary confirmation', recipient);
+        void trackEvent('itinerary_email_sent', { itinerary_days: itinerary.days, delivery_mode: 'endpoint', email_domain: getEmailDomain(recipient) }, currentProfile);
         return;
       }
       const isMailAvailable = await MailComposer.isAvailableAsync();
@@ -4163,17 +5375,17 @@ export default function App() {
         return;
       }
       const mailResult = await MailComposer.composeAsync({
-        recipients: [authSession.user.email],
-        subject: `Vinago+ itinerary confirmation: ${itinerary.title}`,
-        body: buildItineraryEmailBody(authSession.user.name, itinerary, currentProfile),
+        recipients: [recipient],
+        subject,
+        body: messageBody,
       });
       setEmailStatus(t('ai.emailSent'));
       recordActivity('email', 'Opened itinerary email composer', mailResult.status);
-      void trackEvent('itinerary_email_sent', { itinerary_days: itinerary.days, delivery_mode: 'mail_composer', composer_status: mailResult.status, email_domain: getEmailDomain(authSession.user.email) }, currentProfile);
+      void trackEvent('itinerary_email_sent', { itinerary_days: itinerary.days, delivery_mode: 'mail_composer', composer_status: mailResult.status, email_domain: getEmailDomain(recipient) }, currentProfile);
     } catch {
       setEmailStatus(t('ai.emailFailed'));
-      recordActivity('email', 'Itinerary email failed', authSession.user.email);
-      void trackEvent('itinerary_email_failed', { itinerary_days: itinerary.days, email_domain: getEmailDomain(authSession.user.email) }, currentProfile);
+      recordActivity('email', 'Itinerary email failed', recipient);
+      void trackEvent('itinerary_email_failed', { itinerary_days: itinerary.days, email_domain: getEmailDomain(recipient) }, currentProfile);
     }
   };
 
@@ -4201,11 +5413,15 @@ export default function App() {
             profile={currentProfile}
             recentSearches={recentSearches}
             popularPlaces={popularPlaces}
+            nearbyPlaces={nearbyPlaces}
             popularFoods={popularFoods}
+            placesCount={placesCatalog.length}
+            citiesCount={availablePlaceCities.length}
             onOpenSearch={() => setActiveTab('search')}
             onOpenPlace={(id) => openPlace(id, 'home')}
             onOpenFood={(id) => openFood(id)}
             onOpenFilter={() => setActiveTab('filter')}
+            onOpenTab={openTabFromHome}
             t={t}
           />
         );
@@ -4214,9 +5430,12 @@ export default function App() {
           <ExploreScreen
             places={filteredPlaces}
             selectedCity={selectedCity}
+            selectedProfileCities={selectedProfileCities}
+            availableCities={availablePlaceCities}
             onCityChange={changeExploreCity}
             onOpenPlace={(id) => openPlace(id, 'explore')}
             onOpenFilter={() => setActiveTab('filter')}
+            onOpenSearch={() => setActiveTab('search')}
             t={t}
           />
         );
@@ -4232,9 +5451,73 @@ export default function App() {
               askAi(`Tell me more about ${selectedPlace.name}`);
               setActiveTab('ai');
             }}
+            onOpenLivePreview={openLivePreviewRequest}
             t={t}
           />
         );
+      case 'live_preview_request':
+        return (
+          <TranslatedLivePreviewRequestScreen
+            place={{
+              id: selectedPlace.id,
+              name: selectedPlace.name,
+              city: selectedPlace.city,
+              category: selectedPlace.category,
+              description: selectedPlace.description,
+              lat: selectedPlace.lat,
+              lng: selectedPlace.lng,
+            }}
+            isSubmitting={isLivePreviewSubmitting}
+            errorMessage={livePreviewError}
+            onPayAndRequest={(input) => {
+              void createLivePreviewRequest(input);
+            }}
+            onBack={() => setActiveTab('place_detail')}
+          />
+        );
+      case 'live_preview_waiting':
+        return (
+          <TranslatedLivePreviewWaitingScreen
+            request={livePreviewRequest}
+            role={livePreviewRole}
+            errorMessage={livePreviewError}
+            onRefresh={() => {
+              void refreshLivePreviewRequest();
+            }}
+            onJoinCall={() => {
+              void joinLivePreviewCall();
+            }}
+            onCancel={() => {
+              void cancelLivePreviewRequest();
+            }}
+            onOpenCompletion={() => setActiveTab('live_preview_completion')}
+          />
+        );
+      case 'live_call_room':
+        return livePreviewRequest ? (
+          <LiveCallRoomScreen
+            request={livePreviewRequest}
+            role={livePreviewRole}
+            onEndCall={(durationSeconds) => {
+              void endLivePreviewCall(durationSeconds);
+            }}
+          />
+        ) : null;
+      case 'live_preview_completion':
+        return livePreviewRequest ? (
+          <LivePreviewCompletionScreen
+            request={livePreviewRequest}
+            role={livePreviewRole}
+            errorMessage={livePreviewError}
+            onConfirm={() => {
+              void confirmLivePreviewCompletion();
+            }}
+            onDispute={() => {
+              void disputeLivePreviewRequest();
+            }}
+            onRate={saveLivePreviewRating}
+          />
+        ) : null;
       case 'food_detail':
         return (
           <FoodDetailScreen
@@ -4250,7 +5533,14 @@ export default function App() {
           />
         );
       case 'food':
-        return <FoodScreen foods={popularFoods} onOpenFood={openFood} t={t} />;
+        return (
+          <FoodScreen
+            foods={foods}
+            onOpenFood={openFood}
+            onOpenSearch={() => setActiveTab('search')}
+            t={t}
+          />
+        );
       case 'culture':
         return (
           <CultureScreen
@@ -4295,12 +5585,31 @@ export default function App() {
               recordActivity('itinerary', 'Saved itinerary', lastItinerary.title);
               void trackEvent('itinerary_saved', { itinerary_days: lastItinerary.days }, currentProfile);
             }}
-            onSendEmail={sendItineraryEmail}
+            onSendEmail={() => {
+              setEmailRecipient((current) => current || authSession?.user.email || '');
+              setEmailSubject((current) => current || `Lịch trình ${lastItinerary.days}N ${lastItinerary.city} - Vinago+`);
+              setEmailBody((current) => current || buildItineraryPreview(lastItinerary, locale));
+              setActiveTab('itinerary_email');
+            }}
             onExportPdf={() => {
               setActiveTab('itinerary_pdf');
               void trackEvent('itinerary_exported', { itinerary_days: lastItinerary.days, format: 'pdf_preview' }, currentProfile);
             }}
             onBack={() => setActiveTab('ai')}
+            t={t}
+          />
+        ) : null;
+      case 'itinerary_email':
+        return lastItinerary ? (
+          <ItineraryEmailScreen
+            itinerary={lastItinerary}
+            recipient={emailRecipient}
+            subject={emailSubject}
+            body={emailBody}
+            onChangeRecipient={setEmailRecipient}
+            onChangeSubject={setEmailSubject}
+            onChangeBody={setEmailBody}
+            onSend={sendItineraryEmail}
             t={t}
           />
         ) : null;
@@ -4337,13 +5646,81 @@ export default function App() {
           <AccountScreen
             authSession={authSession}
             settings={settings}
+            currentLanguage={currentProfile.language}
+            qrBusy={qrBusy}
+            qrImageUri={qrImageUri}
+            qrMobileStatus={qrMobileStatus}
+            qrStatusText={qrStatusText}
+            scannerBusy={scannerBusy}
             onSignIn={signInWithGoogle}
             onSignOut={signOutGoogle}
+            onOpenQrScanner={openQrScanner}
             onOpenSettings={() => setActiveTab('settings')}
             onOpenLanguage={() => setActiveTab('language')}
+            onOpenPrivacyPolicy={() => {
+              void Linking.openURL(privacyPolicyUrl);
+            }}
+            onOpenLocalHelperOnboarding={() => setActiveTab('local_helper_onboarding')}
+            onOpenLocalHelperJobs={openLocalHelperJobs}
+            onOpenLocalHelperEarnings={openLocalHelperEarnings}
+            onRefreshQrLogin={() => void refreshQrLoginSession()}
             isGoogleAuthPending={isGoogleAuthPending}
-            canSignInWithGoogle={Boolean(googleRequest)}
+            canSignInWithGoogle={Platform.OS !== 'web'}
             t={t}
+          />
+        );
+      case 'local_helper_onboarding':
+        return (
+          <LocalHelperOnboardingScreen
+            existingProfile={localHelperProfile}
+            initialName={currentUserName}
+            initialEmail={currentUserEmail}
+            defaultCity={currentProfile.currentCity}
+            errorMessage={livePreviewError}
+            onSaveProfile={saveLocalHelperProfile}
+            onSetOnline={setLocalHelperOnline}
+          />
+        );
+      case 'local_helper_jobs':
+        return (
+          <LocalHelperJobsScreen
+            profile={localHelperProfile}
+            jobs={localHelperJobs}
+            errorMessage={livePreviewError}
+            onRefresh={() => {
+              void refreshLocalHelperJobs();
+            }}
+            onOpenOnboarding={() => setActiveTab('local_helper_onboarding')}
+            onOpenDetail={openLocalHelperJobDetail}
+            onAccept={(job) => {
+              void acceptLocalHelperJob(job);
+            }}
+          />
+        );
+      case 'local_helper_job_detail':
+        return (
+          <LocalHelperJobDetailScreen
+            profile={localHelperProfile}
+            job={selectedLocalHelperJob}
+            errorMessage={livePreviewError}
+            onAccept={(job) => {
+              void acceptLocalHelperJob(job);
+            }}
+            onJoinCall={() => {
+              void joinLocalHelperJobCall();
+            }}
+            onBack={openLocalHelperJobs}
+          />
+        );
+      case 'local_helper_earnings':
+        return (
+          <LocalHelperEarningsScreen
+            earnings={localHelperEarnings}
+            errorMessage={livePreviewError}
+            onRefresh={() => {
+              void refreshLocalHelperEarnings();
+            }}
+            onOpenJobs={openLocalHelperJobs}
           />
         );
       case 'settings':
@@ -4367,6 +5744,7 @@ export default function App() {
       case 'search':
         return (
           <SearchScreen
+            places={placesCatalog}
             recentSearches={recentSearches}
             onSubmitSearch={submitSearch}
             onClearRecent={clearRecentSearches}
@@ -4403,125 +5781,188 @@ export default function App() {
   };
 
   /* render */
-  if (isBooting) {
+  if (isBooting || !isPlacesDatabaseReady) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <StatusBar style="dark" />
-        <View style={styles.loadingWrap}>
-          <Sparkles color={colors.primary} size={36} />
-          <Text style={styles.loadingTitle}>{t('loading.title')}</Text>
-        </View>
-      </SafeAreaView>
+      <AppLanguageProvider language={currentProfile.language}>
+        <SafeAreaView style={styles.safeArea}>
+          <StatusBar style="dark" />
+          <View style={styles.loadingWrap}>
+            <Sparkles color={colors.primary} size={36} />
+            <Text style={styles.loadingTitle}>{t('loading.title')}</Text>
+          </View>
+        </SafeAreaView>
+      </AppLanguageProvider>
     );
   }
 
   if (!profile) {
     return (
-      <OnboardingScreen
-        draftProfile={draftProfile}
-        setDraftProfile={setDraftProfile}
-        onSave={saveProfile}
-        t={t}
-      />
+      <AppLanguageProvider language={currentProfile.language}>
+        <OnboardingScreen
+          draftProfile={draftProfile}
+          setDraftProfile={setDraftProfile}
+          onSave={saveProfile}
+          t={t}
+        />
+      </AppLanguageProvider>
     );
   }
 
-  ;
-
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="dark" />
-      <View style={[styles.appShell, isWide && styles.appShellWide]}>
-        {isWide ? (
-          <View style={styles.sidebar}>
-            <View style={styles.sidebarHeader}>
-              <View style={styles.logoMark}><Sparkles color={colors.surface} size={20} /></View>
-              <Text style={styles.sidebarTitle}>VINAGO+</Text>
+    <AppLanguageProvider language={currentProfile.language}>
+      <SafeAreaView edges={['top', 'left', 'right']} style={styles.safeArea}>
+        <StatusBar style="dark" />
+        <View style={[styles.appShell, isWide && styles.appShellWide]}>
+          {isWide ? (
+            <View style={styles.sidebar}>
+              <View style={styles.sidebarHeader}>
+                <View style={styles.logoMark}><Sparkles color={colors.surface} size={20} /></View>
+                <Text style={styles.sidebarTitle}>VINAGO+</Text>
+              </View>
+              {bottomTabItems.map((tab) => {
+                const Icon = tab.icon;
+                const active = activeTab === tab.id;
+                return (
+                  <Pressable
+                    key={`side-${tab.id}`}
+                    style={[styles.sidebarTab, active && styles.sidebarTabActive]}
+                    onPress={() => changeTab(tab.id)}
+                  >
+                    <Icon color={active ? colors.primary : colors.muted} size={20} />
+                    <Text style={[styles.sidebarTabText, active && styles.sidebarTabTextActive]}>
+                      {t(tab.labelKey)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+              <View style={styles.sidebarDivider} />
+              {featureShortcuts.map((tab) => {
+                const Icon = tab.icon;
+                const active = activeTab === tab.id;
+                return (
+                  <Pressable
+                    key={`side-feature-${tab.id}`}
+                    style={[styles.sidebarTab, active && styles.sidebarTabActive]}
+                    onPress={() => changeTab(tab.id)}
+                  >
+                    <Icon color={active ? colors.primary : colors.muted} size={20} />
+                    <Text style={[styles.sidebarTabText, active && styles.sidebarTabTextActive]}>
+                      {t(tab.labelKey)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
-            {bottomTabItems.map((tab) => {
-              const Icon = tab.icon;
-              const active = activeTab === tab.id;
-              return (
-                <Pressable
-                  key={`side-${tab.id}`}
-                  style={[styles.sidebarTab, active && styles.sidebarTabActive]}
-                  onPress={() => changeTab(tab.id)}
-                >
-                  <Icon color={active ? colors.primary : colors.muted} size={20} />
-                  <Text style={[styles.sidebarTabText, active && styles.sidebarTabTextActive]}>
-                    {t(tab.labelKey)}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        ) : null}
-        <View style={styles.mainPane}>
-          <HeaderBar
-            title={t('app.name')}
-            subtitle={activeTab === 'home' ? t('home.discoverTitle') : undefined}
-            onBack={
-              ['place_detail', 'food_detail', 'settings', 'language', 'search', 'filter', 'itinerary_preview', 'itinerary_pdf', 'map', 'offline'].includes(activeTab)
-                ? () => {
-                    if (activeTab === 'place_detail') setActiveTab('explore');
-                    else if (activeTab === 'food_detail') setActiveTab('food');
-                    else if (activeTab === 'search') setActiveTab('home');
-                    else if (activeTab === 'itinerary_pdf') setActiveTab('itinerary_preview');
-                    else if (activeTab === 'itinerary_preview') setActiveTab('ai');
-                    else if (activeTab === 'map') setActiveTab(pendingPlaceId ? 'place_detail' : 'home');
-                    else setActiveTab('account');
-                  }
-                : undefined
-            }
-            trailing={
-              <View style={styles.headerActions}>
-                <IconButton icon={SearchIcon} onPress={() => setActiveTab('search')} />
-                <Pressable onPress={() => setShowOfflineBanner(true)} style={styles.headerAction}>
-                  <Wifi color={colors.text} size={18} />
-                </Pressable>
-                <Pressable onPress={resetOnboarding} style={styles.headerAction}>
-                  <Languages color={colors.text} size={18} />
+          ) : null}
+          <View style={[styles.mainPane, mobileBottomInset > 0 && { paddingBottom: mobileBottomInset }]}>
+            <HeaderBar
+              title={t('app.name')}
+              subtitle={activeTab === 'home' ? t('home.discoverTitle') : undefined}
+              onBack={
+                [
+                  'place_detail',
+                  'food_detail',
+                  'settings',
+                  'language',
+                  'search',
+                  'filter',
+                  'itinerary_preview',
+                  'itinerary_email',
+                  'itinerary_pdf',
+                  'map',
+                  'offline',
+                  'live_preview_request',
+                  'live_preview_waiting',
+                  'live_call_room',
+                  'live_preview_completion',
+                  'local_helper_onboarding',
+                  'local_helper_jobs',
+                  'local_helper_job_detail',
+                  'local_helper_earnings',
+                ].includes(activeTab)
+                  ? () => {
+                      if (activeTab === 'place_detail') setActiveTab('explore');
+                      else if (activeTab === 'food_detail') setActiveTab('food');
+                      else if (activeTab === 'search') setActiveTab('home');
+                      else if (activeTab === 'itinerary_email') setActiveTab('itinerary_preview');
+                      else if (activeTab === 'itinerary_pdf') setActiveTab('itinerary_preview');
+                      else if (activeTab === 'itinerary_preview') setActiveTab('ai');
+                      else if (activeTab === 'map') setActiveTab(pendingPlaceId ? 'place_detail' : 'home');
+                      else if (activeTab === 'live_preview_request') setActiveTab('place_detail');
+                      else if (activeTab === 'live_preview_waiting') setActiveTab(livePreviewRole === 'helper' ? 'local_helper_jobs' : 'place_detail');
+                      else if (activeTab === 'live_call_room') setActiveTab('live_preview_waiting');
+                      else if (activeTab === 'live_preview_completion') setActiveTab('live_preview_waiting');
+                      else if (activeTab === 'local_helper_job_detail') openLocalHelperJobs();
+                      else if (activeTab === 'local_helper_onboarding' || activeTab === 'local_helper_jobs' || activeTab === 'local_helper_earnings') setActiveTab('account');
+                      else setActiveTab('account');
+                    }
+                  : undefined
+              }
+
+            />
+            {showOfflineBanner ? (
+              <View style={styles.offlineBanner}>
+                <WifiOff color={colors.primary} size={16} />
+                <Text style={styles.offlineBannerText}>{t('offline.title')}</Text>
+                <Pressable onPress={() => setShowOfflineBanner(false)}>
+                  <X color={colors.muted} size={16} />
                 </Pressable>
               </View>
-            }
-          />
-          {showOfflineBanner ? (
-            <View style={styles.offlineBanner}>
-              <WifiOff color={colors.primary} size={16} />
-              <Text style={styles.offlineBannerText}>{t('offline.title')}</Text>
-              <Pressable onPress={() => setShowOfflineBanner(false)}>
-                <X color={colors.muted} size={16} />
-              </Pressable>
-            </View>
-          ) : null}
-          {renderActiveScreen()}
-          {emailStatus ? (
-            <View style={styles.emailStatusBar}>
-              <Text style={styles.emailStatusText}>{emailStatus}</Text>
-              <Pressable onPress={() => setEmailStatus(null)}>
-                <X color={colors.muted} size={16} />
-              </Pressable>
-            </View>
-          ) : null}
+            ) : null}
+            {renderActiveScreen()}
+            {emailStatus ? (
+              <View style={[styles.emailStatusBar, { bottom: emailStatusBottom }]}>
+                <Text style={styles.emailStatusText}>{emailStatus}</Text>
+                <Pressable onPress={() => setEmailStatus(null)}>
+                  <X color={colors.muted} size={16} />
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
         </View>
-      </View>
-      {!isWide ? <BottomNav activeTab={activeTab} onChange={changeTab} t={t} /> : null}
-    </SafeAreaView>
+        {!isWide ? (
+          <BottomNav
+            activeTab={activeTab}
+            bottomInset={mobileBottomInset}
+            onChange={changeTab}
+            t={t}
+          />
+        ) : null}
+        <QrLoginScanner
+          body={t('account.qrMobileReady')}
+          busy={scannerBusy}
+          onClose={() => setScannerVisible(false)}
+          onScanned={(data) => void handleQrScanned(data)}
+          title={t('account.qrScanWeb')}
+          visible={scannerVisible}
+        />
+      </SafeAreaView>
+    </AppLanguageProvider>
   );
 }
 
 function BottomNav({
   activeTab,
+  bottomInset,
   onChange,
   t,
 }: {
   activeTab: TabId;
+  bottomInset: number;
   onChange: (tab: TabId) => void;
   t: (key: TranslationKey) => string;
 }) {
   const items = bottomTabItems.filter((tab, idx, arr) => arr.findIndex((t) => t.id === tab.id) === idx);
   return (
-    <View style={styles.bottomNav}>
+    <View
+      style={[
+        styles.bottomNav,
+        {
+          height: 64 + bottomInset,
+          paddingBottom: bottomInset,
+        },
+      ]}
+    >
       {items.map((tab) => {
         const Icon = tab.icon;
         const active = activeTab === tab.id;
@@ -4605,7 +6046,32 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   languageFlagText: { fontSize: 18 },
-  languageLabel: { flex: 1, color: colors.text, fontSize: 16, fontWeight: '700' },
+  languageTextStack: { flex: 1, gap: 2 },
+  languageLabel: { color: colors.text, fontSize: 16, fontWeight: '800' },
+  languageSubLabel: { color: colors.muted, fontSize: 12, fontWeight: '700' },
+
+  tripDaysPicker: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceAlt,
+  },
+  dayAdjustButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  dayAdjustText: { color: colors.primary, fontSize: 24, fontWeight: '900' },
+  dayNumberWrap: { alignItems: 'center', gap: 3 },
+  dayNumber: { color: colors.text, fontSize: 34, fontWeight: '900' },
+  dayNumberLabel: { color: colors.muted, fontSize: 12, fontWeight: '800' },
 
   daysRow: { flexDirection: 'row', gap: 10 },
   dayStepper: {
@@ -4643,11 +6109,11 @@ const styles = StyleSheet.create({
 
   /* Bottom nav */
   bottomNav: {
-    position: 'absolute', left: 12, right: 12, bottom: 12,
-    height: 64, borderRadius: 12, backgroundColor: colors.surface,
+    position: 'absolute', left: 0, right: 0, bottom: 0,
+    minHeight: 64, backgroundColor: colors.surface,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around',
-    borderWidth: 1, borderColor: colors.border,
-    shadowColor: colors.shadow, shadowOffset: { width: 0, height: 6 },
+    borderTopWidth: 1, borderTopColor: colors.border,
+    shadowColor: colors.shadow, shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.6, shadowRadius: 12, elevation: 6,
   },
   bottomNavItem: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4 },
@@ -4670,6 +6136,7 @@ const styles = StyleSheet.create({
   sidebarTabActive: { backgroundColor: colors.primarySoft },
   sidebarTabText: { color: colors.muted, fontWeight: '700', fontSize: 14 },
   sidebarTabTextActive: { color: colors.primary, fontWeight: '900' },
+  sidebarDivider: { height: 1, backgroundColor: colors.border, marginVertical: 8 },
   mainPane: { flex: 1 },
 
   /* Home */
@@ -4689,6 +6156,34 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
 
+  homeCatalogBand: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  homeCatalogIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primarySoft,
+  },
+  homeCatalogBody: { flex: 1, gap: 2 },
+  homeCatalogEyebrow: {
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  homeCatalogTitle: { color: colors.text, fontSize: 18, fontWeight: '900' },
+  homeCatalogSub: { color: colors.muted, fontSize: 12, fontWeight: '700' },
+
   quickChipRow: { flexDirection: 'row', gap: 8 },
   homeQuickChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
@@ -4704,6 +6199,30 @@ const styles = StyleSheet.create({
   homeSectionTitle: { color: colors.text, fontSize: 18, fontWeight: '900' },
   homeSectionSubtitle: { color: colors.muted, fontSize: 13, fontWeight: '700' },
   homeSectionLink: { color: colors.primary, fontWeight: '800', fontSize: 13 },
+
+  toolGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  toolTile: {
+    width: '23%',
+    minWidth: 72,
+    minHeight: 76,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  toolIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primarySoft,
+  },
+  toolLabel: { color: colors.text, fontSize: 11, fontWeight: '900', textAlign: 'center' },
 
   popularRow: { gap: 12, paddingRight: 4 },
   popularCard: { width: 200, gap: 8 },
@@ -4734,16 +6253,24 @@ const styles = StyleSheet.create({
   /* Explore */
   exploreTopRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 4, paddingTop: 8, paddingBottom: 4,
+    paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4,
   },
   exploreTitle: { color: colors.text, fontSize: 22, fontWeight: '900' },
   exploreSubtitle: { color: colors.muted, fontSize: 13, fontWeight: '700' },
 
-  exploreCityRow: { flexDirection: 'row', gap: 8, paddingVertical: 8 },
-  exploreCityScroll: { flexGrow: 0, maxHeight: 56 },
+  exploreCityRail: { height: 54 },
+  exploreCityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    height: 54,
+    paddingHorizontal: 12,
+  },
+  exploreCityScroll: { flexGrow: 0, height: 54, maxHeight: 56 },
   exploreCityTab: {
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8,
+    height: 38, paddingHorizontal: 14, borderRadius: 8,
     backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+    alignItems: 'center', justifyContent: 'center',
   },
   exploreCityTabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   exploreCityTabText: { color: colors.muted, fontSize: 13, fontWeight: '800' },
@@ -4813,6 +6340,27 @@ const styles = StyleSheet.create({
   mapPinRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   mapPinText: { color: colors.text, fontSize: 13, fontWeight: '700' },
   mapOpenLink: { color: colors.primary, fontSize: 13, fontWeight: '900' },
+  livePreviewCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: '#f3c7c4',
+  },
+  livePreviewIcon: {
+    height: 42,
+    width: 42,
+    borderRadius: 8,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  livePreviewCopy: { flex: 1, gap: 2 },
+  livePreviewTitle: { color: colors.text, fontSize: 15, fontWeight: '900' },
+  livePreviewBody: { color: colors.muted, fontSize: 12, fontWeight: '700' },
 
   warningBox: {
     flexDirection: 'row', gap: 8, alignItems: 'center', padding: 10,
@@ -4850,6 +6398,9 @@ const styles = StyleSheet.create({
 
   /* Culture */
   cultureContent: { padding: 16, gap: 12, paddingBottom: 96 },
+  cultureHeader: { alignItems: 'center', gap: 4, paddingVertical: 8 },
+  cultureEyebrow: { color: colors.muted, fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  cultureTabs: { flexDirection: 'row', gap: 8, justifyContent: 'center', flexWrap: 'wrap' },
   cultureCard: { padding: 14, borderRadius: 12, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, gap: 6 },
   cultureBadgeRow: { flexDirection: 'row' },
   cultureBadge: {
@@ -4903,6 +6454,15 @@ const styles = StyleSheet.create({
     padding: 12, borderRadius: 12, backgroundColor: colors.surface,
     borderWidth: 1, borderColor: colors.border,
   },
+  favoriteImage: { width: 72, height: 64, borderRadius: 8 },
+  favoriteFallbackIcon: {
+    width: 72,
+    height: 64,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primarySoft,
+  },
   favoriteName: { color: colors.text, fontSize: 16, fontWeight: '900' },
   favoriteSub: { color: colors.muted, fontSize: 13, fontWeight: '700' },
 
@@ -4942,6 +6502,35 @@ const styles = StyleSheet.create({
   accountAvatarImage: { width: '100%', height: '100%' },
   accountName: { color: colors.text, fontSize: 20, fontWeight: '900' },
   accountEmail: { color: colors.muted, fontSize: 13, fontWeight: '700' },
+  qrMobilePanel: { width: '100%', gap: 8, marginTop: 8 },
+  qrLoginPanel: {
+    width: '100%',
+    gap: 12,
+    marginTop: 8,
+    padding: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  qrPanelHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  qrPanelCopy: { flex: 1, gap: 4 },
+  qrPanelTitle: { color: colors.text, fontSize: 15, fontWeight: '900' },
+  qrPanelBody: { color: colors.muted, fontSize: 12, fontWeight: '700', lineHeight: 18 },
+  qrImageFrame: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    height: 274,
+    justifyContent: 'center',
+    padding: 7,
+    width: 274,
+  },
+  qrImage: { height: 260, width: 260 },
+  qrStatusText: { color: colors.muted, fontSize: 12, fontWeight: '700', lineHeight: 18, textAlign: 'center' },
 
   accountSection: { gap: 6 },
   accountSectionTitle: { color: colors.muted, fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
@@ -5062,14 +6651,27 @@ const styles = StyleSheet.create({
   /* Map */
   mapHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 },
   mapHeaderTitle: { color: colors.text, fontSize: 18, fontWeight: '900' },
-  mapSubtitle: { color: colors.muted, fontSize: 14, fontWeight: '700' },
-  mapBody: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 12 },
-  mapPinStack: { alignItems: 'center', gap: 8 },
+  mapSubtitle: { color: colors.muted, fontSize: 14, fontWeight: '700', textAlign: 'center' },
+  mapCanvasWrap: { flex: 1, backgroundColor: colors.surfaceAlt },
+  mapCanvas: { flex: 1, width: '100%', height: '100%' },
+  mapIframe: { flex: 1, width: '100%', height: '100%', borderWidth: 0 },
+  mapSheet: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 16,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  mapSheetContent: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   mapPin: {
-    height: 64, width: 64, borderRadius: 32, backgroundColor: colors.primarySoft,
+    height: 44, width: 44, borderRadius: 8, backgroundColor: colors.primarySoft,
     alignItems: 'center', justifyContent: 'center',
   },
-  mapPinName: { color: colors.text, fontSize: 18, fontWeight: '900' },
+  mapPinName: { color: colors.text, fontSize: 16, fontWeight: '900' },
   mapPinSub: { color: colors.muted, fontSize: 13, fontWeight: '700' },
   mapOpenButton: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
@@ -5144,6 +6746,35 @@ const styles = StyleSheet.create({
     padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border,
   },
   itineraryExportText: { color: colors.primary, fontWeight: '900' },
+
+  /* Email form */
+  emailFormContent: { padding: 16, gap: 14, paddingBottom: 96 },
+  emailHero: { alignItems: 'center', gap: 8, paddingVertical: 18 },
+  emailEnvelope: {
+    width: 112,
+    height: 88,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primarySoft,
+  },
+  emailHeroTitle: { color: colors.text, fontSize: 20, fontWeight: '900', textAlign: 'center' },
+  emailHeroSubtitle: { color: colors.muted, fontSize: 13, fontWeight: '700', textAlign: 'center' },
+  emailFieldGroup: { gap: 6 },
+  emailLabel: { color: colors.text, fontSize: 13, fontWeight: '900' },
+  emailInput: {
+    minHeight: 48,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    color: colors.text,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  emailBodyInput: { minHeight: 122, lineHeight: 20 },
 
   /* PDF preview */
   itineraryPdf: { padding: 16, gap: 12, paddingBottom: 96 },

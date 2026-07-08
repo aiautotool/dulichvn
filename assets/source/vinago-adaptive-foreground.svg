@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Vinago+ adaptive foreground">
+  <g>
+    <path d="M292 302 512 734 732 302" fill="none" stroke="#7f100b" stroke-width="132" stroke-linecap="round" stroke-linejoin="round" opacity="0.22"/>
+    <path d="M292 302 512 734 732 302" fill="none" stroke="#fff7f7" stroke-width="112" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M292 302 512 734 732 302" fill="none" stroke="#ffd23f" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="738" cy="286" r="92" fill="#ffd23f"/>
+    <path d="M738 232v108M684 286h108" fill="none" stroke="#da251d" stroke-width="42" stroke-linecap="round"/>
+  </g>
+</svg>

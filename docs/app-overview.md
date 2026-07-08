@@ -8,8 +8,8 @@ This page is a top-down tour of `App.tsx`. It maps every screen, panel, and stat
 
 | Region | Lines (approx.) | Purpose |
 | --- | --- | --- |
-| Imports & type aliases | 1 – 260 | `AsyncStorage`, `expo-auth-session`, `expo-mail-composer`, lucide icons, RN core, all `type` declarations. |
-| Storage keys & constants | 260 – 350 | `PROFILE_KEY`, `FAVORITES_KEY`, `AUTH_SESSION_KEY`, `ACTIVITY_HISTORY_KEY`, `ANALYTICS_QUEUE_KEY`, `RECENT_SEARCHES_KEY`, `SETTINGS_KEY`, hard-coded Firebase client IDs, `analyticsConfig`. |
+| Imports & type aliases | 1 – 260 | `AsyncStorage`, native Firebase account services, `expo-mail-composer`, lucide icons, RN core, all `type` declarations. |
+| Storage keys & constants | 260 – 350 | `PROFILE_KEY`, `FAVORITES_KEY`, `QR_WEB_SESSION_KEY`, `ACTIVITY_HISTORY_KEY`, `ANALYTICS_QUEUE_KEY`, `RECENT_SEARCHES_KEY`, `SETTINGS_KEY`, Firebase server client ID, `analyticsConfig`. |
 | Analytics event names | 350 – 410 | Union of every event the app fires (32 events). |
 | `languages`, `purposes`, `cities`, `defaultProfile`, `defaultSettings` | 410 – 470 | Catalog data. |
 | `translations` (en/vi) | 470 – 880 | In-file i18n dictionary. ~220 keys, fully covered for both EN and VI. |
@@ -28,7 +28,7 @@ This page is a top-down tour of `App.tsx`. It maps every screen, panel, and stat
 | FoodScreen | 2450 – 2530 | Tabs (Phở & Bún / Vùng miền / Đặc sản) + list. |
 | FoodDetailScreen | 2530 – 2620 | Hero, region/spice/price/pronunciation, allergens, ordering. |
 | CultureScreen | 2620 – 2680 | Card grid with "Nên" / "Không nên" badges. |
-| PhrasesScreen | 2680 – 2760 | Situation filter + phrase rows with audio placeholder. |
+| PhrasesScreen | 2680 – 2760 | Situation filter + phrase rows with Expo Speech audio playback. |
 | EmergencyScreen | 2760 – 2800 | 113/114/115 + Tourist Police + Tourist Hotline. |
 | FavoritesScreen | 2800 – 2870 | Tabs + saved items. |
 | HistoryScreen | 2870 – 2950 | Grouped (Today / Earlier) activity log + clear button. |
@@ -38,7 +38,7 @@ This page is a top-down tour of `App.tsx`. It maps every screen, panel, and stat
 | LanguageScreen | 3260 – 3310 | Language list with flags. |
 | FilterScreen | 3310 – 3390 | City + category + price + rating filters with Apply/Reset. |
 | OfflineScreen | 3390 – 3460 | Full-page offline state with cached/online lists. |
-| MapScreen | 3460 – 3510 | Placeholder showing lat/lng + "Open in Maps" link. |
+| MapScreen | 3460 – 3510 | Leaflet/OpenStreetMap map, marker + "Open in Maps" link. |
 | AiScreen | 3510 – 3630 | Itinerary builder + chat + input. |
 | ItineraryPreviewScreen | 3630 – 3690 | Preview card with Save / Send email / Export PDF. |
 | ItineraryPdfScreen | 3690 – 3740 | Plain-text PDF preview + Share/Export. |
@@ -73,9 +73,10 @@ Onboarding (3 steps)
   resetOnboarding() (from top bar) → AsyncStorage.removeItem + re-show onboarding
 
 Auth
-  signInWithGoogle() → Google.useIdTokenAuthRequest → promptGoogleSignIn
-  on success         → decode JWT payload, setAuthSession, persist, remember id_token
-  signOutGoogle()    → clear state + AsyncStorage
+  native mobile      → GoogleSignin.signIn → Firebase signInWithCredential
+  auth observer      → onAuthStateChanged → setAuthSession
+  web                → QR session polling → mobile approval with Firebase ID token
+  signOutGoogle()    → clear state + Firebase/Google sign-out
 
 Favorites
   toggleFavorite(type, id) → upsert SavedItem, persist, fire favorite_added/removed
@@ -125,7 +126,8 @@ Settings
 | --- | --- | --- |
 | Onboarding profile | `AsyncStorage["vinago-plus-profile"]` | Saved by `saveProfile`, removed by `resetOnboarding` |
 | Favorites | `AsyncStorage["vinago-plus-favorites"]` | Updated on every `toggleFavorite` |
-| Google auth session | `AsyncStorage["vinago-plus-auth-session"]` | Updated on sign-in / sign-out |
+| QR web session | `AsyncStorage["vinago-plus-web-qr-session"]` | Saved after mobile QR approval, cleared on sign-out or verification failure |
+| Legacy Google auth session | `AsyncStorage["vinago-plus-auth-session"]` | Removed during boot |
 | Activity history (capped 80) | `AsyncStorage["vinago-plus-activity-history"]` | Pushed by every `recordActivity`, cleared via "Clear history" |
 | Recent searches (capped 8) | `AsyncStorage["vinago-plus-recent-searches"]` | Pushed on every `submitSearch`, cleared via "Clear all" |
 | Settings | `AsyncStorage["vinago-plus-settings"]` | Pushed on every `updateSettings` |

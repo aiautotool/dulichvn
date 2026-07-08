@@ -186,10 +186,10 @@ type SavedItem = { id: string; type: SavedItemType };
 
 `favoriteRecords` (derived in `App`) flattens these into a `{ key, type, id, title, subtitle }` shape for the Favorites screen by looking up the original entity from the corresponding catalog.
 
-### 6.3 Google identity
+### 6.3 Account identity
 
 ```ts
-type GoogleUser = {
+type AccountAuthUser = {
   id: string;
   email: string;
   name: string;
@@ -200,7 +200,7 @@ type GoogleUser = {
 
 type AuthSessionState = {
   provider: 'google';
-  user: GoogleUser;
+  user: AccountAuthUser;
   signedInAt: string;         // ISO
   lastSeenAt: string;         // ISO, refreshed on every restore
 };
@@ -352,7 +352,7 @@ type ItineraryEmailRequest = {
 };
 ```
 
-Sent as `POST {EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT}` with header `Authorization: Bearer <googleIdToken>` and `Content-Type: application/json`.
+Sent as `POST {EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT}` with header `Authorization: Bearer <firebaseIdToken>` and `Content-Type: application/json`.
 
 ### 9.2 Response (from `src/worker.ts`)
 
@@ -379,7 +379,8 @@ CORS: the Worker reflects the request `Origin` and allows `POST, OPTIONS` with `
 | --- | --- | --- |
 | `PROFILE_KEY` | `vinago-plus-profile` | `UserProfile` |
 | `FAVORITES_KEY` | `vinago-plus-favorites` | `SavedItem[]` |
-| `AUTH_SESSION_KEY` | `vinago-plus-auth-session` | `AuthSessionState` |
+| `QR_WEB_SESSION_KEY` | `vinago-plus-web-qr-session` | Worker-issued QR web session token |
+| `LEGACY_AUTH_SESSION_KEY` | `vinago-plus-auth-session` | Removed during native/web boot |
 | `ACTIVITY_HISTORY_KEY` | `vinago-plus-activity-history` | `ActivityHistoryEntry[]` |
 | `RECENT_SEARCHES_KEY` | `vinago-plus-recent-searches` | `RecentSearch[]` (capped 8) |
 | `SETTINGS_KEY` | `vinago-plus-settings` | `SettingsState` |

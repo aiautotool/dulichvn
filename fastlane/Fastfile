@@ -1,0 +1,46 @@
+default_platform(:android)
+
+PROJECT_ROOT = File.expand_path("..", __dir__)
+
+def google_play_credentials
+  json_key_data = ENV["GOOGLE_PLAY_JSON_KEY_DATA"] || ENV["SUPPLY_JSON_KEY_DATA"]
+  return { json_key_data: json_key_data } if json_key_data && !json_key_data.empty?
+
+  json_key = ENV["GOOGLE_PLAY_JSON_KEY_FILE"] || ENV["SUPPLY_JSON_KEY"]
+  return { json_key: json_key } if json_key && !json_key.empty?
+
+  UI.user_error!(
+    "Missing Google Play service account credentials. Set GOOGLE_PLAY_JSON_KEY_FILE " \
+    "to a service-account JSON path, or GOOGLE_PLAY_JSON_KEY_DATA to the JSON content."
+  )
+end
+
+platform :android do
+  desc "Upload the current release AAB to Google Play via fastlane supply"
+  lane :upload_play do |options|
+    aab_path = options[:aab] || ENV.fetch(
+      "AAB_PATH",
+      "android/app/build/outputs/bundle/release/app-release.aab",
+    )
+    aab_path = File.expand_path(aab_path, PROJECT_ROOT) unless Pathname.new(aab_path).absolute?
+    package_name = options[:package_name] || ENV.fetch("ANDROID_PACKAGE_NAME", "com.vinago.dev")
+    track = options[:track] || ENV.fetch("PLAY_STORE_TRACK", "internal")
+    release_status = options[:release_status] || ENV.fetch("PLAY_STORE_RELEASE_STATUS", "draft")
+    validate_only = ENV["PLAY_STORE_VALIDATE_ONLY"] == "1"
+
+    UI.user_error!("AAB not found: #{aab_path}") unless File.exist?(aab_path)
+
+    upload_to_play_store(
+      package_name: package_name,
+      aab: aab_path,
+      track: track,
+      release_status: release_status,
+      validate_only: validate_only,
+      skip_upload_metadata: true,
+      skip_upload_changelogs: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      **google_play_credentials,
+    )
+  end
+end

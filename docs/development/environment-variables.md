@@ -9,10 +9,10 @@ All of these are read inside `App.tsx`. They must be set in the shell or in a `.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `EXPO_PUBLIC_GA_MEASUREMENT_ID` | undefined | Web GA4 Measurement ID (must start with `G-`). When missing, the app queues analytics events to AsyncStorage instead of sending to gtag. |
-| `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` | fallback to `959396812028-5uedsvgcclv8ngjs97enll5tlmld45oa.apps.googleusercontent.com` | OAuth client for web Google sign-in |
-| `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` | fallback to `959396812028-kebdshs109pum50s7of7eqe27odlgh3l.apps.googleusercontent.com` | OAuth client for Android Google sign-in |
-| `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` | falls back to the web client ID, then the embedded web default | OAuth client for iOS Google sign-in |
+| `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` | fallback to `959396812028-5uedsvgcclv8ngjs97enll5tlmld45oa.apps.googleusercontent.com` | Optional Firebase server/web OAuth client passed to native Google Sign-In so Firebase Auth can mint credentials. iOS still reads its app client from `GoogleService-Info.plist`; web login uses QR, not this env var. |
+| `EXPO_PUBLIC_VINAGO_API_BASE_URL` | web: current origin; native: `https://vinago.aiautotool.com` | Backend base URL for QR web login sessions. Set this to the Worker URL when running Expo web locally and scanning from a physical phone. |
 | `EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT` | unset (the app falls back to `expo-mail-composer`) | Absolute or same-origin URL the app POSTs to when emailing an itinerary |
+| `EXPO_PUBLIC_ENABLE_RUNTIME_TRANSLATION_FALLBACK` | `0` | Set to `1` only while developing if missing local translation pack entries should fall back to Google Translate at runtime. Production should use generated local packs only. |
 
 The `.env.example` file lists the same keys with safe placeholder values. Copy it to `.env` and edit:
 
@@ -62,7 +62,6 @@ If you prefer to manage DNS by hand, create the same record in the Cloudflare da
 | Name | Status |
 | --- | --- |
 | `OPENAI_API_KEY` | Planned for the real chat and translation flows. |
-| `EXPO_PUBLIC_MAPS_KEY` | Planned for Expo Location + Google Maps. |
 | `EXPO_PUBLIC_SQLITE_DB` | Planned for richer offline city packs. |
 
 See [Roadmap](../roadmap.md).

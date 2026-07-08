@@ -5,6 +5,7 @@ node_modules/
 
 # Expo
 .expo/
+.cache/
 .wrangler/
 dist/
 web-build/
@@ -31,9 +32,16 @@ yarn-error.*
 .DS_Store
 *.pem
 
+# local archives / duplicate worktrees
+*.zip
+src 2/
+
 # local env files
 .env
 .env*.local
+fastlane/*service-account*.json
+fastlane/*play*.json
+fastlane/report.xml
 
 # typescript
 *.tsbuildinfo

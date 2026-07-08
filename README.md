@@ -47,28 +47,21 @@ Every event includes locale, selected language, current city, purpose, trip days
 
 ## Google Login, Activity History, And Itinerary Email
 
-Google sign-in is implemented with Expo SDK 56 `expo-auth-session` and `expo-web-browser`. The app stores the signed-in Google profile and recent activity history locally with AsyncStorage.
+Google sign-in is implemented with native Google Sign-In plus Firebase Auth on iOS/Android. The web app signs in by QR approval from the mobile app.
 
-Set the OAuth client IDs before running:
+iOS uses the repo-level `GoogleService-Info.plist`. Expo copies it into the native target via `ios.googleServicesFile`, Firebase boots from that plist in `AppDelegate.swift`, and Google Sign-In reads its `CLIENT_ID`/`REVERSED_CLIENT_ID`. Do not set an iOS OAuth env var for Vinago+.
+
+The `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` value is optional for native builds; it is the Firebase server/web OAuth client passed to Google Sign-In so Firebase can mint credentials. It is not the browser login flow. The current `google-services.json` declares Android package `com.vinago.dev`, and `GoogleService-Info.plist` declares iOS bundle `com.vinago.plus`.
+
+QR web login is also available on the Account tab. On web, Vinago+ creates a Worker-backed QR session and polls it. On mobile, sign in with Google, tap "Scan web login QR", and approve the web session with the current Firebase ID token. For local Expo web testing with a real phone, set:
 
 ```bash
-EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=... \
-EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=... \
-EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=... \
-npm run web
+EXPO_PUBLIC_VINAGO_API_BASE_URL=https://vinago.aiautotool.com npm run web
 ```
-
-The current `google-services.json` was copied from `/Users/vkct/Downloads/google-services(5).json`. It declares Android package `com.vinago.dev`, while this app config uses `com.vinago.plus`; create/update the Firebase Android app and OAuth client for `com.vinago.plus` before relying on native Google sign-in in production builds.
-
-Allow these redirect URIs in Google Cloud Console as needed:
-
-- Web dev: the URL printed by Expo web with `/oauthredirect` appended, for example `http://localhost:8081/oauthredirect`.
-- Web production: `https://vinago.aiautotool.com/oauthredirect`.
-- Native development build: `vinagoplus:/oauthredirect`.
 
 Itinerary confirmation email works in two modes:
 
-- If `EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT` is set, the app posts `{ to, name, itinerary, profile }` to that endpoint with the current Google ID token.
+- If `EXPO_PUBLIC_ITINERARY_EMAIL_ENDPOINT` is set, the app posts `{ to, name, itinerary, profile }` to that endpoint with the current Firebase ID token.
 - If it is unset, the app opens the OS email composer using `expo-mail-composer` with the itinerary prefilled.
 
 The bundled Cloudflare Worker exposes `POST /api/itinerary-email` and sends through Resend. Configure the secret before deploy:
@@ -126,7 +119,7 @@ npm run deploy:cloudflare:global
 ## Next Integrations
 
 - OpenAI API for real chat, translation, and camera guide
-- Expo Location plus Google Maps/Places for nearby suggestions
+- Expo Location plus OpenStreetMap/Places-provider nearby suggestions
 - SQLite city packs for richer offline mode
 - Firebase/Supabase for user sync, CMS content, and subscriptions
 - EAS Build for app store binaries

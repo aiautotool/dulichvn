@@ -1,110 +1,67 @@
 # Google Auth
 
-Google sign-in is implemented with Expo SDK 56's `expo-auth-session` and `expo-web-browser`. It is the only authentication mechanism in the MVP and exists to tie itinerary emails to a verified Google email.
+Google sign-in is implemented with native Google Sign-In plus Firebase Auth on iOS/Android. The web app does not open Google OAuth directly; it signs in through QR approval from a mobile app session.
 
-## Library Surface
-
-```ts
-import * as AuthSession from 'expo-auth-session';
-import * as Google from 'expo-auth-session/providers/google';
-import * as WebBrowser from 'expo-web-browser';
-
-WebBrowser.maybeCompleteAuthSession(); // called at module top level
-```
-
-The hook:
+## Native Library Surface
 
 ```ts
-const [googleRequest, googleResponse, promptGoogleSignIn] = Google.useIdTokenAuthRequest({
-  webClientId:    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID    ?? FIREBASE_WEB_CLIENT_ID,
-  androidClientId:process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID?? FIREBASE_ANDROID_CLIENT_ID,
-  iosClientId:    process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID
-                 ?? process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID
-                 ?? FIREBASE_WEB_CLIENT_ID,
-  redirectUri: AuthSession.makeRedirectUri({
-    scheme: APP_SCHEME,        // 'vinagoplus'
-    path: 'oauthredirect',
-    native: `${APP_SCHEME}:/oauthredirect`,
-  }),
-  selectAccount: true,
-  scopes: ['openid', 'profile', 'email'],
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import {
+  GoogleAuthProvider,
+  getAuth,
+  onAuthStateChanged,
+  signInWithCredential,
+} from '@react-native-firebase/auth';
+
+GoogleSignin.configure({
+  googleServicePlistPath: 'GoogleService-Info',
+  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? FIREBASE_WEB_CLIENT_ID,
 });
 ```
 
-If no env var is set, the app falls back to the `959396812028-*` Firebase client IDs that are also embedded in `google-services.json`. The iOS fallback prefers the web client ID when the iOS env var is missing.
+On iOS, `googleServicePlistPath` makes the native Google Sign-In module read `CLIENT_ID` from `GoogleService-Info.plist`. The `webClientId` is the Firebase server/web OAuth client used for credentials; it is not the web login flow.
+
+## iOS Configuration
+
+- `app.json` declares `ios.googleServicesFile: "./GoogleService-Info.plist"`.
+- The plist declares `BUNDLE_ID: "com.vinago.plus"`.
+- The config plugin copies the plist into `ios/Vinago/GoogleService-Info.plist`.
+- The config plugin adds the plist's `REVERSED_CLIENT_ID` to `CFBundleURLTypes`.
+- `AppDelegate.swift` calls `FirebaseApp.configure()` only when `GoogleService-Info.plist` exists in the app bundle.
+
+Do not configure `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` for Vinago+. The iOS client comes from the plist.
 
 ## Sign-In Flow
 
-1. `signInWithGoogle()` is called from the top-bar account button, the Sidebar, or the `AccountPanel` on the AI tab.
-2. It checks `googleRequest` and `isGoogleAuthPending` to prevent double prompts.
-3. It fires `google_sign_in_started` with `source_screen` and `redirect_uri`.
-4. `promptGoogleSignIn()` opens the Google consent screen.
-5. A `useEffect` watches `googleResponse`:
-   - On `error`, fires `google_sign_in_failed` and resets `isGoogleAuthPending`.
-   - On `success`, reads `authentication.idToken` (or `params.id_token`) and `authentication.accessToken` (or `params.access_token`).
-   - Fetches `https://www.googleapis.com/oauth2/v3/userinfo?access_token=...` to get the canonical `id`, `email`, `verified_email`, `name`, `given_name`, and `picture`.
-   - Builds a `GoogleUser` and stores it in `authSession`.
-   - Persists the session in `AsyncStorage["vinago-plus-auth-session"]`.
-   - Stores the `id_token` in `googleIdToken` (used by the email endpoint).
-   - Records `auth` activity ("Signed in with Google").
-   - Fires `google_sign_in_completed`.
+1. `signInWithGoogle()` is called from the account UI.
+2. `GoogleSignin.signIn()` opens the native Google account picker.
+3. The app reads Google tokens with `GoogleSignin.getTokens()`.
+4. The app builds a Firebase credential with `GoogleAuthProvider.credential(idToken, accessToken)`.
+5. Firebase Auth signs in with `signInWithCredential(getAuth(), credential)`.
+6. `onAuthStateChanged` updates the app `authSession`.
 
-## Sign-Out
+## QR Web Login
 
-`signOutGoogle()`:
+1. The web Account tab creates a Worker-backed QR login session.
+2. The mobile app must already be signed in with Firebase Auth.
+3. The mobile app scans the QR code and approves the web session with a fresh Firebase ID token from `firebaseUser.getIdToken()`.
+4. The web app polls until the Worker returns the approved session.
 
-1. Clears `authSession`, `googleIdToken`, and `emailStatus`.
-2. The auth-session effect removes `vinago-plus-auth-session` from AsyncStorage.
-3. Records `auth` activity ("Signed out of Google").
-4. Fires `google_signed_out` with the email domain (e.g. `gmail.com`).
+## Email Endpoint
 
-## Configuration Checklist
-
-### Web
-
-Set the web OAuth client ID and add these redirect URIs to the client in Google Cloud Console:
-
-| Environment | URI |
-| --- | --- |
-| Dev (Metro default) | `http://localhost:8081/oauthredirect` |
-| Staging | `https://staging.vinago.aiautotool.com/oauthredirect` |
-| Production | `https://vinago.aiautotool.com/oauthredirect` |
-
-### Native
-
-For Android, the OAuth client must match:
-
-- Package name: `com.vinago.plus` (set in `app.json`).
-- SHA-1: the certificate that signs the release build (typically the upload key).
-
-For iOS, the OAuth client must match:
-
-- Bundle ID: `com.vinago.plus`.
-- URL scheme: `vinagoplus` (declared in `app.json` as `scheme`).
-
-> The `google-services.json` in this repo was copied from a different Firebase project and declares Android package `com.vinago.dev`. It must be regenerated for `com.vinago.plus` before relying on native Google sign-in in production builds. The web OAuth client ID embedded in it is still useful as the default.
-
-### Email Endpoint
-
-The bearer ID token is sent to the Cloudflare Worker when the user emails an itinerary. See [Itinerary Email](./itinerary-email.md).
+The bearer ID token sent to the Cloudflare Worker comes from Firebase Auth, not from a decoded browser OAuth response. See [Itinerary Email](./itinerary-email.md).
 
 ## Tracked Events
 
 | Event | Trigger | Key params |
 | --- | --- | --- |
-| `google_sign_in_started` | `signInWithGoogle` is called | `source_screen`, `redirect_uri` |
-| `google_sign_in_completed` | Profile is fetched and stored | `source_screen`, `email_domain`, `verified_email` |
-| `google_sign_in_failed` | `promptGoogleSignIn` throws, or the response is an error, or no token is returned | `error_code` (`prompt_failed` / `missing_auth_token` / `profile_fetch_failed` / Google `errorCode`) |
-| `google_signed_out` | `signOutGoogle` | `source_screen`, `email_domain` |
+| `google_sign_in_started` | Native Google sign-in begins | `source_screen`, `redirect_uri` |
+| `google_sign_in_completed` | Firebase Auth user is available | `source_screen`, `email_domain`, `verified_email` |
+| `google_sign_in_failed` | Native Google or Firebase sign-in rejects | `error_code` |
+| `google_signed_out` | Firebase/Google sign-out is requested | `source_screen`, `email_domain` |
 
-## Edge Cases
+## Troubleshooting
 
-- The `id_token` is stored in component state only, **not** in AsyncStorage. After a full app restart, the user is still "signed in" (session is restored from AsyncStorage), but `googleIdToken` is null until the next sign-in. The email button will fall back to the OS composer in that case.
-- `googleRequest` is `null` until the hook finishes initialization; the buttons render with `disabled` styles in that window.
-- The redirect URI is computed at render time using `AuthSession.makeRedirectUri`, which on web returns the dev server URL + `/oauthredirect` and on native returns `vinagoplus:/oauthredirect`.
-
-## Security Notes
-
-- The Google `id_token` is not verified cryptographically by the app. The Worker only checks the `email_verified` flag in the payload. For production, consider verifying the JWT signature against Google's JWKS.
-- The app does not store any Google refresh tokens; re-authentication is required after expiry.
-- The Google profile picture URL is stored in the session and rendered as `<Image source={{ uri }} />`. It is not downloaded to disk.
+- If tapping Google sign-in does nothing on iOS, rebuild after `npx expo prebuild --platform ios --no-install` so the plist and reversed client URL scheme are in the native app.
+- If CocoaPods reports Swift pods cannot be integrated as static libraries, keep `ios.useFrameworks: "static"` and the modular header pod lines generated by `plugins/with-google-signin-modular-headers.js`.
+- If Firebase is not configured on iOS, verify the built app contains `GoogleService-Info.plist` and that its `BUNDLE_ID` is `com.vinago.plus`.

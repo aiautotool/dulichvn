@@ -1933,7 +1933,7 @@ flowchart LR
   API --> AI[AI Orchestrator]
   API --> Notify[Notification Service]
   AI --> OpenAI[OpenAI APIs]
-  API --> Maps[Google Maps/Mapbox]
+  API --> Maps[OpenStreetMap/Mapbox]
   API --> CDN[CDN/Object Storage]
   Admin --> CMS[CMS Services]
 ```
@@ -2254,7 +2254,7 @@ flowchart TD
 | Jobs | Celery/RQ/Arq |
 | Search | PostgreSQL full-text initially, vector extension/Search service later |
 | AI | OpenAI through AI Orchestrator |
-| Maps | Google Maps or Mapbox abstraction |
+| Maps | OpenStreetMap or Mapbox abstraction |
 
 ## Mobile i18n Setup
 
