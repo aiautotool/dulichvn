@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CameraView, type CameraType, useCameraPermissions } from 'expo-camera';
 import * as MailComposer from 'expo-mail-composer';
 import * as Speech from 'expo-speech';
 import { StatusBar } from 'expo-status-bar';
@@ -16,6 +17,9 @@ import {
   Bot,
   CalendarCheck,
   Camera,
+  CircleCheck,
+  CircleDollarSign,
+  CloudSun,
   Check,
   ChevronRight,
   Clock,
@@ -36,10 +40,18 @@ import {
   Map as MapIcon,
   MapPin,
   MessageCircle,
+  Mic,
+  Mountain,
+  Navigation,
+  Newspaper,
+  ExternalLink,
+  NotebookPen,
   Phone,
   Plane,
+  PartyPopper,
   Plus,
   QrCode,
+  Radio,
   RefreshCw,
   Search as SearchIcon,
   Send,
@@ -50,24 +62,28 @@ import {
   ScanLine,
   Sparkles,
   Star,
+  StickyNote,
   Trash2,
   TreePine,
   Type,
   User,
   UserCircle,
   Utensils,
+  Video,
   Volume2,
+  Waves,
   Wifi,
   WifiOff,
   X,
 } from 'lucide-react-native';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
   Image,
   ImageSourcePropType,
   Linking,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -85,9 +101,10 @@ import { MockPaymentEscrowRepository } from './src/features/live-preview/reposit
 import { MockWalletRepository } from './src/features/wallet/repositories/MockWalletRepository';
 import { WalletService } from './src/features/wallet/services/WalletService';
 import type { WalletBalance } from './src/features/wallet/types';
+import { fetchWordPressPosts, fetchWpConfigFromSheet, fetchWpConfigsFromSheet, fetchWordPressPostsFromConfigs, type WpArticle, type WpSheetConfig, DEFAULT_WP_URL, normalizeWpUrl } from './src/services/wordpress';
 import { BroadcastJobNotificationService } from './src/features/notifications/services/JobNotificationService';
 import { DemoGooglePlayBillingProvider, GooglePlayBillingProvider } from './src/features/payments/services/GooglePlayBillingProvider';
-import { LiveCallService } from './src/features/live-preview/services/LiveCallService';
+import { LiveCallService, LiveKitCallProviderAdapter } from './src/features/live-preview/services/LiveCallService';
 import { LivePreviewService } from './src/features/live-preview/services/LivePreviewService';
 import { PaymentEscrowService } from './src/features/live-preview/services/PaymentEscrowService';
 import {
@@ -111,6 +128,9 @@ import {
 } from './src/features/live-preview/types';
 import { MockLocalHelperRepository } from './src/features/local-helper/repositories/MockLocalHelperRepository';
 import { LocalHelperService } from './src/features/local-helper/services/LocalHelperService';
+import { analyzeTravelImage, type VisionAnalysis, type VisionAnalysisMode } from './src/features/ai/services/visionApi';
+import { askTravelAi } from './src/features/ai/services/chatApi';
+import { useAppLocation, type AppCoordinates, type AppLocationPermission } from './src/features/location/use-app-location';
 import {
   LocalHelperEarningsScreen,
 } from './src/features/local-helper/screens/LocalHelperEarningsScreen';
@@ -151,6 +171,7 @@ import {
   signOutAccount,
   type AccountAuthUser,
 } from './src/features/account/services/firebaseAccount';
+import { getOrCreateGuestSession, getStoredGuestSession, type GuestSession } from './src/features/account/services/guest-session';
 import { AppLanguageProvider, translateStaticText, useTranslatedData } from './src/lib/translation';
 import {
   PlaceRealityCard,
@@ -160,6 +181,13 @@ import {
 } from './src/features/reality-layer/components/RealityLayerCards';
 import { buildDemoRealityLayer } from './src/features/reality-layer/services/demoRealityLayer';
 import type { TranslationLanguageCode } from './src/lib/translation/language';
+import { getDistanceKm, roundDistanceKm } from './src/lib/location/distance';
+import { MemberVideoCallScreen } from './src/features/member-calls/screens/MemberVideoCallScreen';
+import { getMemberSocialOverview, registerMemberPushToken } from './src/features/member-calls/services/member-social-api';
+import { initializeMemberNotifications, listenForMemberNotificationPress, showMemberNotification, type MemberNotification } from './src/features/member-calls/services/member-notifications';
+import { CallTone } from './src/features/member-calls/components/CallTone';
+import { LiveTeamScreen } from './src/features/live-team/screens/live-team-screen';
+import { normalizeLiveTeamCode } from './src/features/live-team/services/live-team-code';
 
 /* ============================================================
  *  Domain types
@@ -207,6 +235,11 @@ type City =
 
 type TabId =
   | 'home'
+  | 'trips'
+  | 'saved'
+  | 'notifications'
+  | 'currency'
+  | 'nearby'
   | 'explore'
   | 'place_detail'
   | 'food'
@@ -227,6 +260,8 @@ type TabId =
   | 'filter'
   | 'map'
   | 'offline'
+  | 'member_video_call'
+  | 'live_team'
   | 'live_preview_request'
   | 'live_preview_waiting'
   | 'live_call_room'
@@ -362,6 +397,7 @@ type SettingsState = {
   measurementUnit: 'metric' | 'imperial';
   fontScale: number;
   appVersion: string;
+  wpNewsUrl: string;
 };
 
 type RecentSearch = {
@@ -380,6 +416,7 @@ const ANALYTICS_QUEUE_KEY = 'vinago-plus-analytics-queue';
 const RECENT_SEARCHES_KEY = 'vinago-plus-recent-searches';
 const SETTINGS_KEY = 'vinago-plus-settings';
 const LEGACY_AUTH_SESSION_KEY = 'vinago-plus-auth-session';
+const LOCATION_PROMPT_DISMISSED_KEY = 'vinago-plus-location-prompt-dismissed';
 
 const ACTIVITY_HISTORY_LIMIT = 80;
 const RECENT_SEARCHES_LIMIT = 8;
@@ -409,7 +446,7 @@ const livePreviewPaymentProvider = process.env.EXPO_PUBLIC_ENABLE_REAL_GOOGLE_PL
   : new DemoGooglePlayBillingProvider();
 const jobNotificationService = new BroadcastJobNotificationService();
 const localHelperRepository = new MockLocalHelperRepository(livePreviewRepository);
-const liveCallService = new LiveCallService(liveCallRepository);
+const liveCallService = new LiveCallService(liveCallRepository, new LiveKitCallProviderAdapter());
 const paymentEscrowService = new PaymentEscrowService(livePreviewRepository, paymentEscrowRepository, walletService);
 const livePreviewService = new LivePreviewService(
   livePreviewRepository,
@@ -519,6 +556,19 @@ const languageNativeNames: Record<Language, string> = {
   Vietnamese: 'Tiếng Việt',
 };
 
+const guestModeLabels: Record<Language, string> = {
+  English: 'Guest mode · No sign-in required',
+  Vietnamese: 'Chế độ Guest · Không cần đăng nhập',
+  Korean: '게스트 모드 · 로그인 불필요',
+  Japanese: 'ゲストモード · ログイン不要',
+  Chinese: '访客模式 · 无需登录',
+  'Chinese Traditional': '訪客模式 · 無需登入',
+  Thai: 'โหมดผู้เยี่ยมชม · ไม่ต้องเข้าสู่ระบบ',
+  French: 'Mode invité · Connexion non requise',
+  German: 'Gastmodus · Keine Anmeldung erforderlich',
+  Spanish: 'Modo invitado · No requiere inicio de sesión',
+};
+
 const languageSecondaryNames: Record<Language, string> = {
   'Chinese Traditional': 'Chinese Traditional',
   Chinese: 'Chinese Simplified',
@@ -621,6 +671,7 @@ const defaultSettings: SettingsState = {
   measurementUnit: 'metric',
   fontScale: 1,
   appVersion: SETTINGS_VERSION,
+  wpNewsUrl: DEFAULT_WP_URL,
 };
 
 /* ============================================================
@@ -651,9 +702,13 @@ const translations = {
     /* Bottom nav */
     'nav.explore': 'Explore',
     'nav.favorites': 'Favorites',
-    'nav.ai': 'Chat',
+    'nav.trips': 'Trips',
+    'nav.saved': 'Saved',
+    'nav.ai': 'AI',
     'nav.history': 'History',
     'nav.account': 'Account',
+    'memberCall.nav': 'Chat',
+    'liveTeam.nav': 'Live Team',
 
     /* Top bar */
     'topbar.welcomeBack': 'Welcome back',
@@ -661,7 +716,7 @@ const translations = {
 
     /* Search */
     'search.title': 'Search',
-    'search.placeholder': 'Search places, food, phrases...',
+    'search.placeholder': 'Search or ask AI...',
     'search.recent': 'Recent searches',
     'search.suggestions': 'Suggestions',
     'search.popularPlaces': 'Popular places',
@@ -673,13 +728,13 @@ const translations = {
     'search.related': 'Related',
 
     /* Home */
-    'home.greeting': 'Hello',
-    'home.discoverTitle': 'Discover Vietnam',
+    'home.greeting': 'Good evening',
+    'home.discoverTitle': 'Where do you want to go today?',
     'home.catalogTitle': 'Vietnam guide',
     'home.catalogPlaces': 'places',
     'home.catalogCities': 'cities',
     'home.catalogSaved': 'ready offline',
-    'home.searchPlaceholder': 'Search places, food, phrases...',
+    'home.searchPlaceholder': 'Search anything or ask AI...',
     'home.quick.all': 'All',
     'home.quick.food': 'Food',
     'home.quick.stay': 'Nature',
@@ -698,6 +753,10 @@ const translations = {
     'home.tool.ai': 'AI plan',
     'home.tool.map': 'Map',
     'home.tool.offline': 'Offline',
+    'home.tool.nearby': 'Nearby',
+    'home.tool.translate': 'Translate',
+    'home.tool.currency': 'Currency',
+    'home.tool.weather': 'Weather',
 
     /* Explore / Place */
     'explore.title': 'Destinations',
@@ -924,15 +983,19 @@ const translations = {
 
     'nav.explore': 'Khám phá',
     'nav.favorites': 'Yêu thích',
-    'nav.ai': 'Chat',
+    'nav.trips': 'Chuyến đi',
+    'nav.saved': 'Đã lưu',
+    'nav.ai': 'AI',
     'nav.history': 'Lịch sử',
     'nav.account': 'Tài khoản',
+    'memberCall.nav': 'Chat',
+    'liveTeam.nav': 'Đội du lịch',
 
     'topbar.welcomeBack': 'Chào mừng trở lại',
     'topbar.search': 'Tìm kiếm',
 
     'search.title': 'Tìm kiếm',
-    'search.placeholder': 'Tìm địa điểm, món ăn, câu giao tiếp...',
+    'search.placeholder': 'Tìm kiếm hoặc hỏi AI...',
     'search.recent': 'Tìm kiếm gần đây',
     'search.suggestions': 'Gợi ý',
     'search.popularPlaces': 'Địa điểm phổ biến',
@@ -943,13 +1006,13 @@ const translations = {
     'search.clearAll': 'Xóa tất cả',
     'search.related': 'Liên quan',
 
-    'home.greeting': 'Xin chào',
-    'home.discoverTitle': 'Khám phá Việt Nam',
+    'home.greeting': 'Chào buổi tối',
+    'home.discoverTitle': 'Hôm nay bạn muốn đi đâu?',
     'home.catalogTitle': 'Cẩm nang Việt Nam',
     'home.catalogPlaces': 'địa điểm',
     'home.catalogCities': 'thành phố',
     'home.catalogSaved': 'sẵn sàng offline',
-    'home.searchPlaceholder': 'Tìm địa điểm, món ăn, câu giao tiếp...',
+    'home.searchPlaceholder': 'Tìm bất cứ điều gì hoặc hỏi AI...',
     'home.quick.all': 'Tất cả',
     'home.quick.food': 'Món ăn',
     'home.quick.stay': 'Thiên nhiên',
@@ -968,6 +1031,14 @@ const translations = {
     'home.tool.ai': 'AI lịch trình',
     'home.tool.map': 'Bản đồ',
     'home.tool.offline': 'Ngoại tuyến',
+    'home.tool.nearby': 'Gần đây',
+    'home.tool.translate': 'Dịch',
+    'home.tool.currency': 'Tiền tệ',
+    'home.tool.weather': 'Thời tiết',
+    'home.newsTitle': 'Tin tức & Cập nhật',
+    'home.newsSubtitle': 'Cập nhật từ WordPress (aiautotool.com)',
+    'home.newsConfig': 'Cấu hình URL',
+    'home.newsRefresh': 'Làm mới',
 
     'explore.title': 'Địa điểm',
     'explore.countLabel': 'địa điểm phù hợp',
@@ -1408,33 +1479,36 @@ const phrases: Phrase[] = [
 ];
 
 const emergencyCards = [
+  { id: 'national_sos', titleKey: 'Khẩn cấp quốc gia', phone: '112', phrase: 'Tôi cần giúp đỡ khẩn cấp.' },
   { id: 'police', titleKey: 'Cảnh sát', phone: '113', phrase: 'Cho tôi gọi cảnh sát.' },
   { id: 'fire', titleKey: 'Cứu hỏa', phone: '114', phrase: 'Có cháy, giúp tôi.' },
   { id: 'ambulance', titleKey: 'Cấp cứu', phone: '115', phrase: 'Tôi cần xe cấp cứu.' },
   { id: 'tourist_police', titleKey: 'Cảnh sát du lịch', phone: '1800 6118', phrase: '' },
   { id: 'tourist_hotline', titleKey: 'Đường dây nóng du lịch', phone: '0588 247 247', phrase: '' },
+  { id: 'embassy', titleKey: 'Hỗ trợ đại sứ quán', phone: '112', phrase: 'Tôi bị mất hộ chiếu.' },
+  { id: 'taxi', titleKey: 'Taxi an toàn', phone: '1055', phrase: 'Vui lòng gọi taxi giúp tôi.' },
 ] as const;
 
-const tripStyles = ['Culture + Food', 'Relaxed', 'Family', 'Business'] as const;
+const tripStyles = ['Budget', 'Luxury', 'Family', 'Solo', 'Backpacker'] as const;
 type TripStyle = (typeof tripStyles)[number];
 
 const bottomTabItems: { id: TabId; labelKey: TranslationKey; icon: typeof Home }[] = [
   { id: 'home', labelKey: 'nav.explore' as TranslationKey, icon: Home },
-  { id: 'favorites', labelKey: 'nav.favorites' as TranslationKey, icon: Heart },
-  { id: 'history', labelKey: 'nav.history' as TranslationKey, icon: HistoryIcon },
-  { id: 'ai', labelKey: 'nav.ai' as TranslationKey, icon: MessageCircle },
+  { id: 'trips', labelKey: 'nav.trips' as TranslationKey, icon: Plane },
+  { id: 'ai', labelKey: 'nav.ai' as TranslationKey, icon: Sparkles },
+  { id: 'saved', labelKey: 'nav.favorites', icon: Heart },
   { id: 'account', labelKey: 'nav.account' as TranslationKey, icon: User },
 ];
 
 const featureShortcuts: { id: TabId; labelKey: TranslationKey; icon: typeof Home }[] = [
-  { id: 'explore', labelKey: 'home.tool.explore', icon: MapPin },
-  { id: 'food', labelKey: 'home.tool.food', icon: Utensils },
-  { id: 'culture', labelKey: 'home.tool.culture', icon: BookOpen },
-  { id: 'phrases', labelKey: 'home.tool.phrases', icon: Volume2 },
+  { id: 'live_team', labelKey: 'liveTeam.nav', icon: Radio },
+  { id: 'nearby', labelKey: 'home.tool.nearby', icon: Navigation },
+  { id: 'phrases', labelKey: 'home.tool.translate', icon: Languages },
   { id: 'emergency', labelKey: 'home.tool.emergency', icon: Phone },
-  { id: 'ai', labelKey: 'home.tool.ai', icon: Bot },
+  { id: 'member_video_call', labelKey: 'memberCall.nav', icon: MessageCircle },
   { id: 'map', labelKey: 'home.tool.map', icon: MapIcon },
   { id: 'offline', labelKey: 'home.tool.offline', icon: WifiOff },
+  { id: 'currency', labelKey: 'home.tool.currency', icon: CircleDollarSign },
 ];
 
 const quickQuestions = [
@@ -1461,10 +1535,66 @@ const popularFoodIds = ['pho', 'banh_mi', 'bun_cha', 'com_tam', 'bun_bo_hue'];
  *  Pure helpers
  * ============================================================ */
 
+const aiLanguageCopy: Record<Locale, { welcome: string; unavailable: string; listening: string }> = {
+  en: {
+    welcome: "Hi! I'm Vinago+ AI, ready to help you explore Vietnam. Where would you like to go today?",
+    unavailable: 'The AI service is temporarily unavailable. Please try again shortly.',
+    listening: 'Vinago+ AI is preparing an answer…',
+  },
+  vi: {
+    welcome: 'Chào bạn! Tôi là Vinago+ AI, sẵn sàng giúp bạn khám phá Việt Nam. Bạn muốn đi đâu hôm nay?',
+    unavailable: 'Dịch vụ AI đang tạm thời gián đoạn. Vui lòng thử lại sau ít phút.',
+    listening: 'Vinago+ AI đang chuẩn bị câu trả lời…',
+  },
+  ko: {
+    welcome: '안녕하세요! Vinago+ AI입니다. 베트남 여행을 도와드릴게요. 오늘 어디로 가고 싶으신가요?',
+    unavailable: 'AI 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.',
+    listening: 'Vinago+ AI가 답변을 준비하고 있습니다…',
+  },
+  ja: {
+    welcome: 'こんにちは！Vinago+ AIです。ベトナム旅行をお手伝いします。今日はどこへ行きたいですか？',
+    unavailable: 'AIサービスは一時的に利用できません。しばらくしてからもう一度お試しください。',
+    listening: 'Vinago+ AIが回答を準備しています…',
+  },
+  'zh-CN': {
+    welcome: '您好！我是 Vinago+ AI，很高兴帮助您探索越南。今天想去哪里？',
+    unavailable: 'AI 服务暂时不可用，请稍后再试。',
+    listening: 'Vinago+ AI 正在准备回答…',
+  },
+  'zh-TW': {
+    welcome: '您好！我是 Vinago+ AI，很高興協助您探索越南。今天想去哪裡？',
+    unavailable: 'AI 服務暫時無法使用，請稍後再試。',
+    listening: 'Vinago+ AI 正在準備回答…',
+  },
+  th: {
+    welcome: 'สวัสดี! ฉันคือ Vinago+ AI พร้อมช่วยคุณเที่ยวเวียดนาม วันนี้อยากไปที่ไหน?',
+    unavailable: 'บริการ AI ไม่พร้อมใช้งานชั่วคราว โปรดลองอีกครั้งในภายหลัง',
+    listening: 'Vinago+ AI กำลังเตรียมคำตอบ…',
+  },
+  fr: {
+    welcome: 'Bonjour ! Je suis Vinago+ AI, prêt à vous aider à découvrir le Vietnam. Où souhaitez-vous aller aujourd’hui ?',
+    unavailable: 'Le service d’IA est temporairement indisponible. Veuillez réessayer dans quelques instants.',
+    listening: 'Vinago+ AI prépare une réponse…',
+  },
+  de: {
+    welcome: 'Hallo! Ich bin Vinago+ AI und helfe dir, Vietnam zu entdecken. Wohin möchtest du heute reisen?',
+    unavailable: 'Der KI-Dienst ist vorübergehend nicht verfügbar. Bitte versuche es später erneut.',
+    listening: 'Vinago+ AI bereitet eine Antwort vor…',
+  },
+  es: {
+    welcome: '¡Hola! Soy Vinago+ AI y estoy listo para ayudarte a descubrir Vietnam. ¿Adónde te gustaría ir hoy?',
+    unavailable: 'El servicio de IA no está disponible temporalmente. Inténtalo de nuevo en unos minutos.',
+    listening: 'Vinago+ AI está preparando una respuesta…',
+  },
+};
+
+const aiSpeechLocales: Record<Locale, string> = {
+  en: 'en-US', vi: 'vi-VN', ko: 'ko-KR', ja: 'ja-JP', 'zh-CN': 'zh-CN', 'zh-TW': 'zh-TW',
+  th: 'th-TH', fr: 'fr-FR', de: 'de-DE', es: 'es-ES',
+};
+
 function getWelcomeMessage(locale: Locale): string {
-  return locale === 'vi'
-    ? 'Chào bạn! Tôi là Vinago+ AI, sẵn sàng giúp bạn khám phá Việt Nam. Bạn muốn đi đâu hôm nay?'
-    : "Hi! I'm Vinago+ AI, ready to help you explore Vietnam. Where would you like to go today?";
+  return aiLanguageCopy[locale].welcome;
 }
 
 function getTodayCopy(city: City, locale: Locale): string {
@@ -2083,17 +2213,102 @@ function IconButton({
   color = colors.text,
   size = 20,
   style,
+  accessibilityLabel,
 }: {
   icon: typeof Home;
   onPress: () => void;
   color?: string;
   size?: number;
   style?: object;
+  accessibilityLabel?: string;
 }) {
   return (
-    <Pressable onPress={onPress} style={[styles.iconButton, style]}>
+    <Pressable accessibilityLabel={accessibilityLabel} onPress={onPress} style={[styles.iconButton, style]}>
       <Icon color={color} size={size} />
     </Pressable>
+  );
+}
+
+function LocationPermissionModal({
+  visible,
+  permission,
+  canAskAgain,
+  isLocating,
+  cityLabel,
+  error,
+  isVietnamese,
+  onAllow,
+  onNotNow,
+  onOpenSettings,
+}: {
+  visible: boolean;
+  permission: AppLocationPermission;
+  canAskAgain: boolean;
+  isLocating: boolean;
+  cityLabel: string | null;
+  error: string | null;
+  isVietnamese: boolean;
+  onAllow: () => void;
+  onNotNow: () => void;
+  onOpenSettings: () => void;
+}) {
+  const needsSettings = permission === 'denied' && !canAskAgain;
+  const title = cityLabel
+    ? (isVietnamese ? `Vị trí hiện tại: ${cityLabel}` : `Current location: ${cityLabel}`)
+    : (isVietnamese ? 'Cho phép Vinago+ dùng vị trí?' : 'Allow Vinago+ to use your location?');
+
+  return (
+    <Modal animationType="fade" onRequestClose={onNotNow} transparent visible={visible}>
+      <View style={styles.locationPermissionBackdrop}>
+        <Pressable accessibilityLabel="Close location permission" onPress={onNotNow} style={styles.locationPermissionDismiss} />
+        <View style={styles.locationPermissionCard}>
+          <View style={styles.locationPermissionIcon}><Navigation color={colors.surface} size={27} /></View>
+          <Text style={styles.locationPermissionTitle}>{title}</Text>
+          <Text style={styles.locationPermissionBody}>
+            {isVietnamese
+              ? 'Vị trí giúp Vinago+ cá nhân hóa các tính năng cần khoảng cách thực tế.'
+              : 'Your location helps Vinago+ personalize features that depend on real distance.'}
+          </Text>
+          <View style={styles.locationPermissionUses}>
+            {[
+              isVietnamese ? 'Địa điểm gần bạn và chỉ đường' : 'Nearby places and directions',
+              isVietnamese ? 'Thời tiết, cảnh báo an toàn và giá địa phương' : 'Weather, safety alerts and local prices',
+              isVietnamese ? 'Gợi ý AI và công việc Local Helper gần đó' : 'AI suggestions and nearby Local Helper jobs',
+            ].map((label) => (
+              <View key={label} style={styles.locationPermissionUseRow}>
+                <CircleCheck color={colors.success} size={17} />
+                <Text style={styles.locationPermissionUseText}>{label}</Text>
+              </View>
+            ))}
+          </View>
+          <View style={styles.locationPermissionPrivacy}>
+            <ShieldAlert color={colors.primary} size={17} />
+            <Text style={styles.locationPermissionPrivacyText}>
+              {isVietnamese
+                ? 'Các tính năng trên chỉ dùng vị trí khi app đang mở. Live Team chỉ chia sẻ vị trí nền sau khi bạn chủ động bật “Chia sẻ GPS”.'
+                : 'These features use location only while the app is open. Live Team shares background location only after you turn on “Share GPS”.'}
+            </Text>
+          </View>
+          {error ? <Text style={styles.locationPermissionError}>{error}</Text> : null}
+          <Pressable
+            accessibilityRole="button"
+            disabled={isLocating}
+            onPress={needsSettings ? onOpenSettings : onAllow}
+            style={[styles.locationPermissionPrimary, isLocating && styles.disabledButton]}
+          >
+            {isLocating ? <ActivityIndicator color={colors.surface} size="small" /> : <MapPin color={colors.surface} size={19} />}
+            <Text style={styles.locationPermissionPrimaryText}>
+              {needsSettings
+                ? (isVietnamese ? 'Mở Cài đặt' : 'Open Settings')
+                : (isVietnamese ? 'Cho phép vị trí' : 'Allow location')}
+            </Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={onNotNow} style={styles.locationPermissionSecondary}>
+            <Text style={styles.locationPermissionSecondaryText}>{isVietnamese ? 'Để sau' : 'Not now'}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -2356,8 +2571,422 @@ function OnboardingScreen({
   );
 }
 
+/* ============================================================
+ *  WordPress News Section & Reader Components
+ * ============================================================ */
+
+function WordPressNewsSection({
+  wpNewsUrl,
+  onOpenArticle,
+  onOpenConfig,
+}: {
+  wpNewsUrl: string;
+  onOpenArticle: (article: WpArticle) => void;
+  onOpenConfig: () => void;
+}) {
+  const [configs, setConfigs] = useState<WpSheetConfig[]>([]);
+  const [selectedSiteIndex, setSelectedSiteIndex] = useState<number>(-1); // -1 for All
+  const [articles, setArticles] = useState<WpArticle[]>([]);
+  const [page, setPage] = useState<number>(1);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const loadNews = useCallback(
+    async (targetPage: number = 1, siteIdx: number = selectedSiteIndex, existingConfigs?: WpSheetConfig[]) => {
+      if (targetPage === 1) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+      setErrorMsg(null);
+
+      let activeConfigs = existingConfigs || configs;
+      if (targetPage === 1 && activeConfigs.length === 0) {
+        activeConfigs = await fetchWpConfigsFromSheet();
+        setConfigs(activeConfigs);
+      }
+
+      try {
+        let fetchedArticles: WpArticle[] = [];
+        let moreAvailable = false;
+
+        if (siteIdx === -1) {
+          // Fetch merged posts from all Google Sheet sites
+          const res = await fetchWordPressPostsFromConfigs(activeConfigs, targetPage, 6);
+          fetchedArticles = res.articles;
+          moreAvailable = res.hasMore;
+        } else {
+          // Fetch posts from selected site
+          const cfg = activeConfigs[siteIdx] || { siteUrl: wpNewsUrl || DEFAULT_WP_URL, categories: 'Soft' };
+          const res = await fetchWordPressPosts(cfg.siteUrl, 8, cfg.categories, targetPage);
+          fetchedArticles = res.articles;
+          moreAvailable = res.hasMore ?? false;
+          if (res.error && targetPage === 1) {
+            setErrorMsg(res.error);
+          }
+        }
+
+        if (targetPage === 1) {
+          setArticles(fetchedArticles);
+        } else {
+          setArticles((prev) => {
+            const existingIds = new Set(prev.map((a) => a.id));
+            const newItems = fetchedArticles.filter((a) => !existingIds.has(a.id));
+            return [...prev, ...newItems];
+          });
+        }
+        setHasMore(moreAvailable);
+        setPage(targetPage);
+      } catch {
+        if (targetPage === 1) {
+          setErrorMsg('Không thể tải bài viết');
+        }
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    [configs, selectedSiteIndex, wpNewsUrl]
+  );
+
+  useEffect(() => {
+    void (async () => {
+      setLoading(true);
+      const fetchedConfigs = await fetchWpConfigsFromSheet();
+      setConfigs(fetchedConfigs);
+      await loadNews(1, -1, fetchedConfigs);
+    })();
+  }, []);
+
+  const handleSelectTab = (idx: number) => {
+    setSelectedSiteIndex(idx);
+    void loadNews(1, idx);
+  };
+
+  const handleLoadMore = () => {
+    if (!loadingMore && hasMore) {
+      void loadNews(page + 1);
+    }
+  };
+
+  return (
+    <View style={styles.v2Section}>
+      <View style={styles.homeSectionHeader}>
+        <View style={styles.flexOne}>
+          <View style={styles.newsTitleRow}>
+            <View style={styles.newsTitleIconWrap}>
+              <Newspaper color={colors.primary} size={18} />
+            </View>
+            <Text style={styles.homeSectionTitle}>📰 Tin tức & Cập nhật</Text>
+          </View>
+          <Text style={styles.newsSubtext} numberOfLines={1}>
+            Cập nhật thông tin công nghệ & du lịch mới nhất
+          </Text>
+        </View>
+        <View style={styles.newsHeaderActions}>
+          <Pressable accessibilityLabel="Làm mới tin tức" style={styles.newsIconButton} onPress={() => loadNews(1)}>
+            <RefreshCw color={colors.primary} size={15} />
+          </Pressable>
+        </View>
+      </View>
+
+      {/* Multi-site Category Filter Chips */}
+      {configs.length > 1 ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.newsTabsRail}>
+          <Pressable
+            style={[styles.newsTabChip, selectedSiteIndex === -1 && styles.newsTabChipActive]}
+            onPress={() => handleSelectTab(-1)}
+          >
+            <Text style={[styles.newsTabChipText, selectedSiteIndex === -1 && styles.newsTabChipTextActive]}>
+              Tất cả nguồn ({configs.length})
+            </Text>
+          </Pressable>
+          {configs.map((cfg, idx) => {
+            const domainLabel = cfg.siteUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, '').replace(/^www\./i, '');
+            return (
+              <Pressable
+                key={`${cfg.siteUrl}-${idx}`}
+                style={[styles.newsTabChip, selectedSiteIndex === idx && styles.newsTabChipActive]}
+                onPress={() => handleSelectTab(idx)}
+              >
+                <Text style={[styles.newsTabChipText, selectedSiteIndex === idx && styles.newsTabChipTextActive]}>
+                  {cfg.categories ? `${cfg.categories} · ` : ''}{domainLabel}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      ) : null}
+
+      {errorMsg ? (
+        <View style={styles.newsErrorBanner}>
+          <Info color="#92400e" size={15} />
+          <Text style={styles.newsErrorText}>{errorMsg}. Đang dùng bài viết mẫu.</Text>
+        </View>
+      ) : null}
+
+      {loading ? (
+        <View style={styles.newsLoadingRail}>
+          <ActivityIndicator color={colors.primary} size="small" />
+          <Text style={styles.newsLoadingText}>Đang tải bài viết mới nhất...</Text>
+        </View>
+      ) : (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.v2CardRail}>
+          {articles.map((item) => (
+            <Pressable key={item.id} style={styles.v2NewsCard} onPress={() => onOpenArticle(item)}>
+              <Image
+                source={{ uri: item.imageUrl }}
+                style={styles.v2NewsImage}
+                defaultSource={require('./assets/photos/ha-long-bay.jpg')}
+              />
+              <View style={styles.v2NewsBadge}>
+                <Text style={styles.v2NewsBadgeText}>{item.category}</Text>
+              </View>
+              <View style={styles.v2NewsBody}>
+                <Text style={styles.v2NewsTitle} numberOfLines={2}>{item.title}</Text>
+                <Text style={styles.v2NewsExcerpt} numberOfLines={2}>{item.excerpt}</Text>
+                <View style={styles.v2NewsMetaRow}>
+                  <View style={styles.v2NewsMetaItem}>
+                    <Clock color={colors.muted} size={12} />
+                    <Text style={styles.v2NewsMetaText}>{item.date}</Text>
+                  </View>
+                  <Text style={styles.v2NewsReadTime}>{item.readTime}</Text>
+                </View>
+              </View>
+            </Pressable>
+          ))}
+
+          {/* Next Page / Load More Card */}
+          {hasMore ? (
+            <Pressable
+              style={styles.newsLoadMoreCard}
+              onPress={handleLoadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? (
+                <ActivityIndicator color={colors.primary} size="small" />
+              ) : (
+                <>
+                  <View style={styles.newsLoadMoreIconCircle}>
+                    <ChevronRight color={colors.primary} size={22} />
+                  </View>
+                  <Text style={styles.newsLoadMoreTitle}>Trang tiếp theo</Text>
+                  <Text style={styles.newsLoadMoreSub}>Tải thêm bài viết ➔</Text>
+                </>
+              )}
+            </Pressable>
+          ) : null}
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+function NewsDetailModal({
+  article,
+  onClose,
+}: {
+  article: WpArticle | null;
+  onClose: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const [viewMode, setViewMode] = useState<'reader' | 'web'>('reader');
+
+  if (!article) return null;
+
+  const handleOpenBrowser = () => {
+    if (article.link) {
+      void Linking.openURL(article.link);
+    }
+  };
+
+  return (
+    <Modal animationType="slide" transparent={false} visible={article !== null} onRequestClose={onClose}>
+      <View style={[styles.newsModalSafeArea, { paddingTop: Math.max(insets.top, 44) }]}>
+        <View style={styles.newsModalHeader}>
+          <Pressable accessibilityLabel="Đóng tin tức" style={styles.newsModalCloseBtn} onPress={onClose}>
+            <ArrowLeft color={colors.text} size={22} />
+          </Pressable>
+          <View style={styles.newsModalTabSwitcher}>
+            <Pressable
+              style={[styles.newsModalTab, viewMode === 'reader' && styles.newsModalTabActive]}
+              onPress={() => setViewMode('reader')}
+            >
+              <Text style={[styles.newsModalTabText, viewMode === 'reader' && styles.newsModalTabTextActive]}>Đọc nhanh</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.newsModalTab, viewMode === 'web' && styles.newsModalTabActive]}
+              onPress={() => setViewMode('web')}
+            >
+              <Text style={[styles.newsModalTabText, viewMode === 'web' && styles.newsModalTabTextActive]}>Trình duyệt</Text>
+            </Pressable>
+          </View>
+          <Pressable accessibilityLabel="Mở trên trình duyệt ngoài" style={styles.newsModalCloseBtn} onPress={handleOpenBrowser}>
+            <ExternalLink color={colors.primary} size={20} />
+          </Pressable>
+        </View>
+
+        {viewMode === 'reader' ? (
+          <ScrollView contentContainerStyle={styles.newsReaderContent} showsVerticalScrollIndicator={false}>
+            <Image source={{ uri: article.imageUrl }} style={styles.newsReaderHeroImg} />
+            <View style={styles.newsReaderCategoryWrap}>
+              <Text style={styles.newsReaderCategory}>{article.category}</Text>
+              <Text style={styles.newsReaderDot}>•</Text>
+              <Text style={styles.newsReaderReadTime}>{article.readTime}</Text>
+            </View>
+            <Text style={styles.newsReaderTitle}>{article.title}</Text>
+            <View style={styles.newsReaderMetaRow}>
+              <User color={colors.muted} size={14} />
+              <Text style={styles.newsReaderMetaText}>{article.author}</Text>
+              <Text style={styles.newsReaderDot}>•</Text>
+              <Clock color={colors.muted} size={14} />
+              <Text style={styles.newsReaderMetaText}>{article.date}</Text>
+            </View>
+            <View style={styles.newsReaderDivider} />
+            <Text style={styles.newsReaderBody}>{article.content}</Text>
+
+            <Pressable style={styles.newsReaderCtaBtn} onPress={handleOpenBrowser}>
+              <Globe color={colors.surface} size={18} />
+              <Text style={styles.newsReaderCtaText}>Xem bài viết gốc trên Web</Text>
+              <ExternalLink color={colors.surface} size={16} />
+            </Pressable>
+          </ScrollView>
+        ) : (
+          <View style={styles.flexOne}>
+            <WebView
+              source={{ uri: article.link }}
+              startInLoadingState
+              renderLoading={() => (
+                <View style={styles.newsWebLoading}>
+                  <ActivityIndicator color={colors.primary} size="large" />
+                </View>
+              )}
+            />
+          </View>
+        )}
+      </View>
+    </Modal>
+  );
+}
+
+function WpUrlConfigModal({
+  visible,
+  currentUrl,
+  onSave,
+  onClose,
+}: {
+  visible: boolean;
+  currentUrl: string;
+  onSave: (url: string) => void;
+  onClose: () => void;
+}) {
+  const [inputUrl, setInputUrl] = useState(currentUrl);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [sheetCategory, setSheetCategory] = useState<string>('');
+
+  useEffect(() => {
+    if (visible) {
+      setInputUrl(currentUrl);
+    }
+  }, [visible, currentUrl]);
+
+  const handleSyncSheet = async () => {
+    setIsSyncing(true);
+    const sheetConfig = await fetchWpConfigFromSheet();
+    if (sheetConfig.siteUrl) {
+      setInputUrl(sheetConfig.siteUrl);
+      setSheetCategory(sheetConfig.categories);
+    }
+    setIsSyncing(false);
+  };
+
+  const handleOpenSheetLink = () => {
+    void Linking.openURL('https://docs.google.com/spreadsheets/d/1SDTIcToGLww8beiHeyN71p30qVN3ZqjO6pvsJK0Nsh8/edit?gid=0#gid=0');
+  };
+
+  const handleSave = () => {
+    const normalized = normalizeWpUrl(inputUrl);
+    onSave(normalized);
+    onClose();
+  };
+
+  return (
+    <Modal animationType="fade" transparent visible={visible} onRequestClose={onClose}>
+      <Pressable style={styles.modalOverlay} onPress={onClose}>
+        <Pressable style={styles.wpConfigModalBox} onPress={(e) => e.stopPropagation()}>
+          <View style={styles.modalHeaderRow}>
+            <View style={styles.newsTitleRow}>
+              <Newspaper color={colors.primary} size={20} />
+              <Text style={styles.modalHeaderTitle}>Cấu hình WordPress News</Text>
+            </View>
+            <Pressable onPress={onClose}><X color={colors.muted} size={20} /></Pressable>
+          </View>
+
+          <Text style={styles.wpConfigDesc}>
+            Cấu hình được tự động lấy từ Google Sheet công khai hoặc bạn có thể đồng bộ/thay đổi thủ công bên dưới.
+          </Text>
+
+          <View style={styles.wpSheetBox}>
+            <View style={styles.wpSheetHeaderRow}>
+              <Text style={styles.wpSheetTitle}>📊 Google Sheet Cấu Hình:</Text>
+              <Pressable style={styles.wpSheetLinkBtn} onPress={handleOpenSheetLink}>
+                <Text style={styles.wpSheetLinkText}>Mở Google Sheet ↗</Text>
+              </Pressable>
+            </View>
+            <Pressable style={styles.wpSyncSheetBtn} onPress={handleSyncSheet} disabled={isSyncing}>
+              <RefreshCw color={colors.primary} size={14} />
+              <Text style={styles.wpSyncSheetBtnText}>
+                {isSyncing ? 'Đang đọc Google Sheet...' : 'Lấy URL & Danh mục từ Google Sheet'}
+              </Text>
+            </Pressable>
+            {sheetCategory ? (
+              <Text style={styles.wpSheetCategoryNotice}>
+                Chuyên mục Google Sheet: <Text style={{ fontWeight: '700', color: colors.primary }}>{sheetCategory}</Text>
+              </Text>
+            ) : null}
+          </View>
+
+          <Text style={styles.wpConfigLabel}>URL Trang Web WordPress:</Text>
+          <TextInput
+            style={styles.wpConfigInput}
+            value={inputUrl}
+            onChangeText={setInputUrl}
+            placeholder="https://aiautotool.com"
+            placeholderTextColor={colors.muted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+
+          <View style={styles.wpPresetRow}>
+            <Text style={styles.wpPresetLabel}>Mẫu mặc định:</Text>
+            <Pressable style={styles.wpPresetChip} onPress={() => setInputUrl(DEFAULT_WP_URL)}>
+              <Text style={styles.wpPresetChipText}>https://aiautotool.com</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.wpModalActions}>
+            <Pressable style={styles.wpCancelBtn} onPress={onClose}>
+              <Text style={styles.wpCancelText}>Hủy</Text>
+            </Pressable>
+            <Pressable style={styles.wpSaveBtn} onPress={handleSave}>
+              <Check color={colors.surface} size={16} />
+              <Text style={styles.wpSaveText}>Lưu & Cập nhật</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 function HomeScreen({
   profile,
+  locationLabel,
+  locationPermission,
+  locationLoading,
   recentSearches,
   popularPlaces,
   nearbyPlaces,
@@ -2369,9 +2998,18 @@ function HomeScreen({
   onOpenFood,
   onOpenFilter,
   onOpenTab,
+  isFavorite,
+  onToggleFavorite,
+  onRequestLocation,
   t,
+  wpNewsUrl,
+  onOpenArticle,
+  onOpenWpConfig,
 }: {
   profile: UserProfile;
+  locationLabel: string | null;
+  locationPermission: AppLocationPermission;
+  locationLoading: boolean;
   recentSearches: RecentSearch[];
   popularPlaces: Place[];
   nearbyPlaces: Place[];
@@ -2383,198 +3021,173 @@ function HomeScreen({
   onOpenFood: (id: string) => void;
   onOpenFilter: () => void;
   onOpenTab: (tab: TabId) => void;
+  isFavorite: (type: SavedItemType, id: string) => boolean;
+  onToggleFavorite: (type: SavedItemType, id: string) => void;
+  onRequestLocation: () => void;
   t: (key: TranslationKey) => string;
+  wpNewsUrl: string;
+  onOpenArticle: (article: WpArticle) => void;
+  onOpenWpConfig: () => void;
 }) {
-  const [quickFilter, setQuickFilter] = useState<'all' | 'food' | 'stay' | 'transport'>('all');
-  const filteredPlaces = useMemo(() => {
-    if (quickFilter === 'food') return [];
-    const themedPlaces = popularPlaces.filter((place) => {
-      const haystack = `${place.category} ${place.tags.join(' ')}`.toLowerCase();
-      if (quickFilter === 'stay') {
-        return /(vịnh|biển|đảo|núi|cao nguyên|hang|suối|đồi|thiên nhiên|bay|beach|cave|mountain)/.test(haystack);
-      }
-      if (quickFilter === 'transport') {
-        return /(di sản|lịch sử|di tích|chùa|hoàng|unesco|phố cổ|chăm|heritage|history)/.test(haystack);
-      }
-      return true;
-    });
-    if (quickFilter !== 'all' && themedPlaces.length > 0) return themedPlaces;
-    return popularPlaces;
-  }, [quickFilter, popularPlaces]);
-  const filteredFoods = useMemo(() => {
-    if (quickFilter !== 'food') return [];
-    return popularFoods;
-  }, [quickFilter, popularFoods]);
-  const { data: translatedPlaces } = useTranslatedData(filteredPlaces);
-  const { data: translatedFoods } = useTranslatedData(filteredFoods);
+  const { data: translatedPlaces } = useTranslatedData(popularPlaces);
+  const { data: translatedFoods } = useTranslatedData(popularFoods);
   const { data: translatedNearbyPlaces } = useTranslatedData(nearbyPlaces);
-  const { data: translatedSelectedCitiesLabel } = useTranslatedData(getSelectedCitiesLabel(profile));
+  const categories: { label: string; icon: typeof Home; target: TabId }[] = [
+    { label: 'Beaches', icon: Waves, target: 'explore' },
+    { label: 'Mountains', icon: Mountain, target: 'explore' },
+    { label: 'Cities', icon: MapPin, target: 'explore' },
+    { label: 'Food', icon: Utensils, target: 'food' },
+    { label: 'Culture', icon: BookOpen, target: 'culture' },
+    { label: 'Festival', icon: PartyPopper, target: 'explore' },
+    { label: 'Shopping', icon: ShoppingBag, target: 'explore' },
+    { label: 'Photo spots', icon: Camera, target: 'explore' },
+  ];
+
+  const PlaceCard = ({ place }: { place: Place }) => (
+    <Pressable style={styles.v2PlaceCard} onPress={() => onOpenPlace(place.id)}>
+      <Image source={place.image} style={styles.v2PlaceImage} />
+      <Pressable
+        accessibilityLabel={`Save ${place.name}`}
+        style={styles.v2SaveButton}
+        onPress={() => onToggleFavorite('place', place.id)}
+      >
+        <Heart
+          color={isFavorite('place', place.id) ? colors.primary : colors.surface}
+          fill={isFavorite('place', place.id) ? colors.primary : 'transparent'}
+          size={18}
+        />
+      </Pressable>
+      <View style={styles.v2PlaceBody}>
+        <Text style={styles.v2PlaceName} numberOfLines={1}>{place.name}</Text>
+        <View style={styles.v2MetaRow}>
+          <Star color={colors.accent} fill={colors.accent} size={13} />
+          <Text style={styles.v2MetaText}>4.8</Text>
+          <Text style={styles.v2OpenText}>Open</Text>
+        </View>
+        <Text style={styles.v2PlaceSub} numberOfLines={1}>📍 {place.city} · {place.category}</Text>
+      </View>
+    </Pressable>
+  );
 
   return (
-    <ScrollView contentContainerStyle={styles.homeContent} showsVerticalScrollIndicator={false}>
-      <View style={styles.homeTopRow}>
-        <View>
-          <Text style={styles.homeGreeting}>{t('home.greeting')} 👋</Text>
-          <Text style={styles.homeDiscover}>{t('home.discoverTitle')}</Text>
+    <ScrollView contentContainerStyle={styles.v2HomeContent} showsVerticalScrollIndicator={false}>
+      <View style={styles.v2Hero}>
+        <View style={styles.homeTopRow}>
+          <View style={styles.flexOne}>
+            <Text style={styles.v2Greeting}>{t('home.greeting')} 👋</Text>
+            <Text style={styles.v2HeroTitle}>{t('home.discoverTitle')}</Text>
+          </View>
+          <IconButton accessibilityLabel="Open travel alerts" icon={Bell} onPress={() => onOpenTab('notifications')} style={styles.v2Bell} />
         </View>
-        <IconButton icon={Bell} onPress={() => {}} />
+        <View style={styles.v2SearchWrap}>
+          <Pressable style={styles.v2SearchMain} onPress={onOpenSearch}>
+            <SearchIcon color={colors.muted} size={19} />
+            <Text style={styles.homeSearchText}>{t('home.searchPlaceholder')}</Text>
+          </Pressable>
+          <Pressable accessibilityLabel="Open AI voice assistant" style={styles.v2SearchAction} onPress={() => onOpenTab('ai')}><Mic color={colors.primary} size={20} /></Pressable>
+          <Pressable accessibilityLabel="Open AI camera" style={styles.v2SearchAction} onPress={() => onOpenTab('ai')}><Camera color={colors.primary} size={20} /></Pressable>
+        </View>
+        <Pressable accessibilityRole="button" onPress={onRequestLocation} style={styles.homeLocationPill}>
+          {locationLoading ? <ActivityIndicator color={colors.primary} size="small" /> : <MapPin color={colors.primary} size={16} />}
+          <Text style={styles.homeLocationText} numberOfLines={1}>
+            {locationPermission === 'granted'
+              ? (locationLabel || 'Current location')
+              : 'Use my current location'}
+          </Text>
+          {locationPermission === 'granted' ? <RefreshCw color={colors.primary} size={14} /> : <ChevronRight color={colors.primary} size={15} />}
+        </Pressable>
+        <Pressable style={styles.v2AskAi} onPress={() => onOpenTab('ai')}>
+          <Sparkles color={colors.surface} size={17} />
+          <Text style={styles.v2AskAiText}>Ask Vinago+ AI</Text>
+          <ChevronRight color={colors.surface} size={17} />
+        </Pressable>
       </View>
 
-      <Pressable style={styles.homeSearchRow} onPress={onOpenSearch}>
-        <SearchIcon color={colors.muted} size={18} />
-        <Text style={styles.homeSearchText}>{t('home.searchPlaceholder')}</Text>
-        <Pressable style={styles.homeFilterButton} onPress={onOpenFilter}>
-          <Filter color={colors.surface} size={16} />
-        </Pressable>
-      </Pressable>
-
-
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.quickChipRow}
-      >
-        {[
-          { id: 'all', label: t('home.quick.all'), icon: Compass },
-          { id: 'food', label: t('home.quick.food'), icon: Utensils },
-          { id: 'stay', label: t('home.quick.stay'), icon: TreePine },
-          { id: 'transport', label: t('home.quick.transport'), icon: BookOpen },
-        ].map((chip) => {
-          const Icon = chip.icon;
-          const active = quickFilter === chip.id;
-          return (
-            <Pressable
-              key={chip.id}
-              style={[styles.homeQuickChip, active && styles.homeQuickChipActive]}
-              onPress={() => setQuickFilter(chip.id as typeof quickFilter)}
-            >
-              <Icon color={active ? colors.surface : colors.primary} size={16} />
-              <Text
-                style={[
-                  styles.homeQuickChipText,
-                  active && styles.homeQuickChipTextActive,
-                ]}
-              >
-                {chip.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
-
-      <View style={styles.homeSection}>
+      <View style={styles.v2Section}>
         <Text style={styles.homeSectionTitle}>{t('home.toolsTitle')}</Text>
-        <View style={styles.toolGrid}>
-          {featureShortcuts.map((shortcut) => {
+        <View style={styles.v2QuickActions}>
+          {featureShortcuts.slice(0, 4).map((shortcut, index) => {
             const Icon = shortcut.icon;
             return (
-              <Pressable
-                key={shortcut.id}
-                style={styles.toolTile}
-                onPress={() => onOpenTab(shortcut.id)}
-              >
-                <View style={styles.toolIcon}>
-                  <Icon color={colors.primary} size={20} />
-                </View>
-                <Text style={styles.toolLabel}>{t(shortcut.labelKey)}</Text>
+              <Pressable key={`${shortcut.labelKey}-${index}`} style={styles.v2QuickItem} onPress={() => onOpenTab(shortcut.id)}>
+                <View style={styles.v2QuickIcon}><Icon color={colors.primary} size={21} /></View>
+                <Text style={styles.v2QuickLabel}>{t(shortcut.labelKey)}</Text>
               </Pressable>
             );
           })}
         </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.v2MoreTools}>
+          {featureShortcuts.slice(4).map((shortcut, index) => {
+            const Icon = shortcut.icon;
+            return <Pressable key={`more-${shortcut.labelKey}-${index}`} style={styles.v2MoreToolChip} onPress={() => onOpenTab(shortcut.id)}><Icon color={colors.primary} size={17} /><Text style={styles.v2MoreToolText}>{t(shortcut.labelKey)}</Text></Pressable>;
+          })}
+        </ScrollView>
       </View>
 
-      {recentSearches.length > 0 ? (
-        <View style={styles.homeSection}>
-          <SectionTitle title={t('search.recent')} />
-          <View style={styles.recentChipWrap}>
-            {recentSearches.slice(0, 5).map((s) => (
-              <View key={s.id} style={styles.recentChip}>
-                <Clock color={colors.muted} size={13} />
-                <Text style={styles.recentChipText}>{s.query}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-      ) : null}
-
-      <View style={styles.homeSection}>
+      <View style={styles.v2Section}>
         <View style={styles.homeSectionHeader}>
-          <Text style={styles.homeSectionTitle}>{t('home.popularTitle')}</Text>
-          <Pressable onPress={() => onOpenTab('explore')}>
-            <Text style={styles.homeSectionLink}>{t('home.popularViewAll')}</Text>
-          </Pressable>
+          <Text style={styles.homeSectionTitle}>Explore by category</Text>
+          <Pressable onPress={onOpenFilter}><Filter color={colors.primary} size={18} /></Pressable>
         </View>
-        {quickFilter === 'food' ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.popularRow}
-          >
-            {translatedFoods.map((food) => (
-              <Pressable
-                key={food.id}
-                style={styles.popularCard}
-                onPress={() => onOpenFood(food.id)}
-              >
-                <Image source={food.image} style={styles.popularCardImage} />
-                <View style={styles.popularCardRating}>
-                  <Star color={colors.accent} fill={colors.accent} size={12} />
-                  <Text style={styles.popularCardRatingText}>4.9 (210)</Text>
-                </View>
-                <Text style={styles.popularCardName}>{food.name}</Text>
-                <Text style={styles.popularCardSub}>{food.region}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-        ) : (
-          <View style={styles.popularGrid}>
-            {translatedPlaces.map((place) => (
-              <Pressable
-                key={place.id}
-                style={styles.popularGridCard}
-                onPress={() => onOpenPlace(place.id)}
-              >
-                <Image source={place.image} style={styles.popularGridImage} />
-                <Text style={styles.popularGridName}>{place.name}</Text>
-                <Text style={styles.popularGridSub}>
-                  {place.city} · {place.category}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        )}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.v2CategoryRow}>
+          {categories.map(({ label, icon: Icon, target }) => (
+            <Pressable key={label} style={styles.v2Category} onPress={() => onOpenTab(target)}>
+              <View style={styles.v2CategoryIcon}><Icon color={colors.primary} size={21} /></View>
+              <Text style={styles.v2CategoryText}>{label}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
       </View>
 
-      <View style={styles.homeSection}>
+      <View style={styles.v2Section}>
         <View style={styles.homeSectionHeader}>
-          <Text style={styles.homeSectionTitle}>
-            {profile.currentCity === 'Other'
-              ? t('home.popularTitle')
-              : t('home.nearbyTitle')}
-          </Text>
+          <Text style={styles.homeSectionTitle}>🔥 Trending destinations</Text>
+          <Pressable onPress={() => onOpenTab('explore')}><Text style={styles.homeSectionLink}>{t('home.popularViewAll')}</Text></Pressable>
         </View>
-        <Text style={styles.homeSectionSubtitle}>
-          {t('home.selectedCities')}: {translatedSelectedCitiesLabel}
-        </Text>
-        {translatedNearbyPlaces.length > 0 ? (
-          <View style={styles.popularGrid}>
-            {translatedNearbyPlaces.slice(0, 3).map((place) => (
-              <Pressable
-                key={`nearby-${place.id}`}
-                style={styles.popularGridCard}
-                onPress={() => onOpenPlace(place.id)}
-              >
-                <Image source={place.image} style={styles.popularGridImage} />
-                <Text style={styles.popularGridName}>{place.name}</Text>
-                <Text style={styles.popularGridSub}>
-                  {place.city} · {place.category}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        ) : null}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.v2CardRail}>
+          {translatedPlaces.slice(0, 5).map((place) => <PlaceCard key={place.id} place={place} />)}
+        </ScrollView>
       </View>
+
+      <WordPressNewsSection
+        wpNewsUrl={wpNewsUrl}
+        onOpenArticle={onOpenArticle}
+        onOpenConfig={onOpenWpConfig}
+      />
+
+      <View style={styles.v2Section}>
+        <View style={styles.homeSectionHeader}>
+          <Text style={styles.homeSectionTitle}>💎 Hidden gems near {locationLabel || (profile.currentCity === 'Other' ? 'you' : profile.currentCity)}</Text>
+          <Pressable accessibilityLabel="Refresh nearby places" onPress={onRequestLocation}><Navigation color={colors.primary} size={18} /></Pressable>
+        </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.v2CardRail}>
+          {translatedNearbyPlaces.slice(0, 5).map((place) => <PlaceCard key={`nearby-${place.id}`} place={place} />)}
+        </ScrollView>
+      </View>
+
+      <View style={styles.v2Section}>
+        <Text style={styles.homeSectionTitle}>🍜 Must eat</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.v2FoodRail}>
+          {translatedFoods.slice(0, 5).map((food) => (
+            <Pressable key={food.id} style={styles.v2FoodCard} onPress={() => onOpenFood(food.id)}>
+              <Image source={food.image} style={styles.v2FoodImage} />
+              <Text style={styles.v2PlaceName} numberOfLines={1}>{food.name}</Text>
+              <Text style={styles.v2PlaceSub}>{food.region} · ⭐ 4.9</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      </View>
+
+      <Pressable style={styles.v2EventBanner} onPress={() => onOpenTab('explore')}>
+        <View style={styles.v2EventIcon}><PartyPopper color={colors.primary} size={24} /></View>
+        <View style={styles.flexOne}>
+          <Text style={styles.v2EventTitle}>Events nearby</Text>
+          <Text style={styles.v2PlaceSub}>Discover festivals and local experiences this week</Text>
+        </View>
+        <ChevronRight color={colors.primary} size={20} />
+      </Pressable>
+
+      {recentSearches.length > 0 ? <Text style={styles.v2RecentHint}>Recent: {recentSearches[0].query}</Text> : null}
     </ScrollView>
   );
 }
@@ -2674,6 +3287,128 @@ function ExploreScreen({
             </Pressable>
           ))
         )}
+      </ScrollView>
+    </View>
+  );
+}
+
+function NearbyScreen({
+  places: items,
+  coordinates,
+  locationLabel,
+  permission,
+  isLocating,
+  error,
+  onRequestLocation,
+  onOpenPlace,
+  t,
+}: {
+  places: Place[];
+  coordinates: AppCoordinates | null;
+  locationLabel: string | null;
+  permission: AppLocationPermission;
+  isLocating: boolean;
+  error: string | null;
+  onRequestLocation: () => void;
+  onOpenPlace: (id: string) => void;
+  t: (key: TranslationKey) => string;
+}) {
+  const [radiusKm, setRadiusKm] = useState<5 | 20 | 50 | 0>(20);
+  const isVietnamese = t('home.tool.nearby') === 'Gần đây';
+  const placesWithDistance = useMemo(() => {
+    if (!coordinates) return [];
+    return items
+      .map((place) => ({
+        place,
+        distanceKm: getDistanceKm(coordinates, { lat: place.lat, lng: place.lng }),
+      }))
+      .sort((first, second) => first.distanceKm - second.distanceKm);
+  }, [coordinates, items]);
+  const visiblePlaces = radiusKm === 0
+    ? placesWithDistance.slice(0, 20)
+    : placesWithDistance.filter((item) => item.distanceKm <= radiusKm).slice(0, 20);
+  const { data: translatedItems } = useTranslatedData(visiblePlaces.map((item) => item.place));
+
+  if (!coordinates) {
+    return (
+      <ScrollView contentContainerStyle={styles.nearbyEmptyContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.nearbyEmptyIcon}><Navigation color={colors.primary} size={34} /></View>
+        <Text style={styles.nearbyEmptyTitle}>{isVietnamese ? 'Khám phá địa điểm xung quanh bạn' : 'Discover places around you'}</Text>
+        <Text style={styles.nearbyEmptyBody}>
+          {isVietnamese
+            ? 'Bật vị trí để xem địa điểm gần nhất, khoảng cách thực tế và chỉ đường từ vị trí hiện tại.'
+            : 'Turn on location to see the nearest places, real distance and directions from where you are.'}
+        </Text>
+        {error ? <Text style={styles.locationPermissionError}>{error}</Text> : null}
+        <Pressable disabled={isLocating} onPress={onRequestLocation} style={[styles.nearbyLocationButton, isLocating && styles.disabledButton]}>
+          {isLocating ? <ActivityIndicator color={colors.surface} size="small" /> : <MapPin color={colors.surface} size={19} />}
+          <Text style={styles.nearbyLocationButtonText}>
+            {permission === 'denied'
+              ? (isVietnamese ? 'Cấp lại quyền vị trí' : 'Enable location permission')
+              : (isVietnamese ? 'Dùng vị trí hiện tại' : 'Use current location')}
+          </Text>
+        </Pressable>
+        <View style={styles.locationPermissionPrivacy}>
+          <ShieldAlert color={colors.primary} size={17} />
+          <Text style={styles.locationPermissionPrivacyText}>
+            {isVietnamese
+              ? 'Tính năng này chỉ dùng vị trí khi app đang mở. Live Team chỉ chia sẻ vị trí nền sau khi bạn chủ động bật “Chia sẻ GPS”.'
+              : 'This feature uses location only while the app is open. Live Team shares background location only after you turn on “Share GPS”.'}
+          </Text>
+        </View>
+      </ScrollView>
+    );
+  }
+
+  return (
+    <View style={styles.flexOne}>
+      <View style={styles.nearbyHeader}>
+        <View style={styles.nearbyLocationRow}>
+          <View style={styles.nearbyGpsDot} />
+          <View style={styles.flexOne}>
+            <Text style={styles.nearbyEyebrow}>{isVietnamese ? 'VỊ TRÍ GPS HIỆN TẠI' : 'CURRENT GPS LOCATION'}</Text>
+            <Text style={styles.nearbyLocationName} numberOfLines={1}>{locationLabel || `${coordinates.lat.toFixed(4)}, ${coordinates.lng.toFixed(4)}`}</Text>
+          </View>
+          <Pressable accessibilityLabel="Refresh current location" disabled={isLocating} onPress={onRequestLocation} style={styles.nearbyRefreshButton}>
+            {isLocating ? <ActivityIndicator color={colors.primary} size="small" /> : <RefreshCw color={colors.primary} size={18} />}
+          </Pressable>
+        </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.nearbyRadiusRow}>
+          {([5, 20, 50, 0] as const).map((radius) => (
+            <Pressable key={radius} onPress={() => setRadiusKm(radius)} style={[styles.nearbyRadiusChip, radiusKm === radius && styles.nearbyRadiusChipActive]}>
+              <Text style={[styles.nearbyRadiusText, radiusKm === radius && styles.nearbyRadiusTextActive]}>{radius === 0 ? (isVietnamese ? 'Gần nhất' : 'Nearest') : `${radius} km`}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+        <Text style={styles.nearbyResultCount}>
+          {visiblePlaces.length} {isVietnamese ? 'địa điểm trong phạm vi đã chọn' : 'places in the selected radius'}
+        </Text>
+      </View>
+      <ScrollView contentContainerStyle={styles.nearbyList} showsVerticalScrollIndicator={false}>
+        {visiblePlaces.length === 0 ? (
+          <View style={styles.nearbyNoResults}>
+            <MapPin color={colors.muted} size={30} />
+            <Text style={styles.nearbyEmptyTitle}>{isVietnamese ? 'Chưa có địa điểm trong phạm vi này' : 'No places in this radius yet'}</Text>
+            <Text style={styles.nearbyEmptyBody}>{isVietnamese ? 'Hãy chọn bán kính lớn hơn hoặc mục Gần nhất.' : 'Choose a larger radius or select Nearest.'}</Text>
+          </View>
+        ) : visiblePlaces.map(({ place, distanceKm }, index) => {
+          const translatedPlace = translatedItems[index] ?? place;
+          return (
+            <Pressable key={place.id} onPress={() => onOpenPlace(place.id)} style={styles.nearbyPlaceCard}>
+              <Image source={place.image} style={styles.nearbyPlaceImage} />
+              <View style={styles.nearbyPlaceBody}>
+                <Text style={styles.nearbyPlaceName} numberOfLines={1}>{translatedPlace.name}</Text>
+                <Text style={styles.nearbyPlaceMeta} numberOfLines={1}>{translatedPlace.city} · {translatedPlace.category}</Text>
+                <View style={styles.nearbyDistanceRow}>
+                  <Navigation color={colors.primary} size={14} />
+                  <Text style={styles.nearbyDistanceText}>{roundDistanceKm(distanceKm).toLocaleString()} km</Text>
+                  <Text style={styles.nearbyDistanceHint}>{isVietnamese ? 'từ vị trí của bạn' : 'from your location'}</Text>
+                </View>
+              </View>
+              <ChevronRight color={colors.muted} size={19} />
+            </Pressable>
+          );
+        })}
       </ScrollView>
     </View>
   );
@@ -3267,6 +4002,26 @@ function EmergencyScreen({ t }: { t: (key: TranslationKey) => string }) {
   );
 }
 
+function NotificationsScreen() {
+  const alerts = [
+    { id: 'weather', title: 'Weather alert', body: 'A short rain shower is expected at 16:30. Move the beach visit to sunset.', icon: CloudSun, tone: '#fff7ed' },
+    { id: 'event', title: 'Festival nearby', body: 'A local cultural performance starts 1.2 km away tonight.', icon: PartyPopper, tone: '#fff0f0' },
+    { id: 'trip', title: 'Trip reminder', body: 'Your museum visit starts in 45 minutes. Allow 15 minutes for travel.', icon: CalendarCheck, tone: '#eff6ff' },
+    { id: 'safety', title: 'Safety update', body: 'Keep valuables secure in busy market areas and use licensed taxis.', icon: ShieldAlert, tone: '#fef2f2' },
+  ];
+  return (
+    <ScrollView contentContainerStyle={styles.notificationsContent} showsVerticalScrollIndicator={false}>
+      <View style={styles.savedHubHeader}><Text style={styles.exploreTitle}>Travel alerts</Text><Text style={styles.exploreSubtitle}>Weather, events, safety and trip reminders</Text></View>
+      {alerts.map(({ id, title, body, icon: Icon, tone }) => (
+        <View key={id} style={[styles.notificationCard, { backgroundColor: tone }]}>
+          <View style={styles.v2QuickIcon}><Icon color={colors.primary} size={21} /></View>
+          <View style={styles.flexOne}><Text style={styles.timelineTitle}>{title}</Text><Text style={styles.v2PlaceSub}>{body}</Text></View>
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
 function FavoritesScreen({
   records,
   onOpenPlace,
@@ -3356,6 +4111,135 @@ function FavoritesScreen({
           ))
         )}
       </ScrollView>
+    </View>
+  );
+}
+
+type TripHubTab = 'itinerary' | 'visited' | 'expense' | 'notes';
+
+function TripsScreen({
+  profile,
+  itinerary,
+  onCreatePlan,
+  onOpenMap,
+}: {
+  profile: UserProfile;
+  itinerary: ItineraryConfirmation | null;
+  onCreatePlan: () => void;
+  onOpenMap: () => void;
+}) {
+  const [tab, setTab] = useState<TripHubTab>('itinerary');
+  const [checked, setChecked] = useState<Record<string, boolean>>({ breakfast: true });
+  const [expense, setExpense] = useState('');
+  const [expenses, setExpenses] = useState<{ id: string; label: string; amount: number }[]>([
+    { id: 'hotel', label: 'Hotel', amount: 1200000 },
+    { id: 'food', label: 'Food & coffee', amount: 460000 },
+  ]);
+  const [note, setNote] = useState('Try the local night market after 7 PM.');
+  const city = profile.currentCity === 'Other' ? 'Đà Nẵng' : profile.currentCity;
+  const timeline = [
+    { id: 'breakfast', time: '08:00', title: 'Vietnamese breakfast', icon: Coffee },
+    { id: 'museum', time: '10:00', title: 'Museum & culture walk', icon: BookOpen },
+    { id: 'lunch', time: '13:00', title: 'Local lunch', icon: Utensils },
+    { id: 'beach', time: '16:00', title: 'Beach sunset', icon: Waves },
+    { id: 'market', time: '20:00', title: 'Night market', icon: ShoppingBag },
+  ];
+  const tabs: { id: TripHubTab; label: string; icon: typeof Home }[] = [
+    { id: 'itinerary', label: 'Itinerary', icon: CalendarCheck },
+    { id: 'visited', label: 'Visited', icon: CircleCheck },
+    { id: 'expense', label: 'Expense', icon: CircleDollarSign },
+    { id: 'notes', label: 'Notes', icon: NotebookPen },
+  ];
+  const total = expenses.reduce((sum, item) => sum + item.amount, 0);
+
+  return (
+    <ScrollView contentContainerStyle={styles.tripContent} showsVerticalScrollIndicator={false}>
+      <View style={styles.tripHero}>
+        <View style={styles.tripHeroTop}>
+          <View>
+            <Text style={styles.tripEyebrow}>UPCOMING TRIP</Text>
+            <Text style={styles.tripTitle}>{city}</Text>
+            <Text style={styles.tripDates}>{profile.tripDays} days · Starts soon</Text>
+          </View>
+          <View style={styles.weatherPill}><CloudSun color={colors.warning} size={22} /><Text style={styles.weatherTemp}>29°</Text></View>
+        </View>
+        <View style={styles.tripProgressTrack}><View style={[styles.tripProgressFill, { width: '35%' }]} /></View>
+        <Text style={styles.tripProgressText}>Day 1 of {profile.tripDays} · 2 activities completed</Text>
+      </View>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tripTabRow}>
+        {tabs.map(({ id, label, icon: Icon }) => (
+          <Pressable key={id} style={[styles.tripTab, tab === id && styles.tripTabActive]} onPress={() => setTab(id)}>
+            <Icon color={tab === id ? colors.surface : colors.muted} size={16} />
+            <Text style={[styles.tripTabText, tab === id && styles.tripTabTextActive]}>{label}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+
+      {tab === 'itinerary' ? (
+        <View style={styles.tripSection}>
+          <View style={styles.homeSectionHeader}><Text style={styles.homeSectionTitle}>Today · Day 1</Text><Pressable onPress={onOpenMap}><Text style={styles.homeSectionLink}>View map</Text></Pressable></View>
+          {timeline.map(({ id, time, title, icon: Icon }, index) => (
+            <Pressable key={id} style={styles.timelineRow} onPress={() => setChecked((current) => ({ ...current, [id]: !current[id] }))}>
+              <View style={styles.timelineTimeWrap}><Text style={styles.timelineTime}>{time}</Text>{index < timeline.length - 1 ? <View style={styles.timelineLine} /> : null}</View>
+              <View style={[styles.timelineIcon, checked[id] && styles.timelineIconDone]}><Icon color={checked[id] ? colors.surface : colors.primary} size={18} /></View>
+              <View style={styles.flexOne}><Text style={[styles.timelineTitle, checked[id] && styles.timelineTitleDone]}>{title}</Text><Text style={styles.v2PlaceSub}>{index % 2 === 0 ? '45 min · Near you' : '1 hr 30 min'}</Text></View>
+              {checked[id] ? <CircleCheck color={colors.success} size={20} /> : <View style={styles.checkCircle} />}
+            </Pressable>
+          ))}
+          {itinerary ? <Panel><Text style={styles.tripPanelTitle}>AI itinerary ready</Text><Text style={styles.v2PlaceSub}>{itinerary.title}</Text></Panel> : <PrimaryButton label="Create with AI Planner" onPress={onCreatePlan} icon={Sparkles} />}
+        </View>
+      ) : null}
+
+      {tab === 'visited' ? (
+        <View style={styles.tripSection}>
+          <Text style={styles.homeSectionTitle}>Visited places</Text>
+          {timeline.filter((item) => checked[item.id]).map(({ id, title, icon: Icon }) => <View key={id} style={styles.tripListRow}><View style={styles.v2QuickIcon}><Icon color={colors.primary} size={20} /></View><View style={styles.flexOne}><Text style={styles.timelineTitle}>{title}</Text><Text style={styles.v2PlaceSub}>{city} · Today</Text></View><CircleCheck color={colors.success} size={22} /></View>)}
+        </View>
+      ) : null}
+
+      {tab === 'expense' ? (
+        <View style={styles.tripSection}>
+          <View style={styles.expenseTotal}><Text style={styles.tripEyebrow}>TRIP SPEND</Text><Text style={styles.expenseAmount}>{total.toLocaleString('vi-VN')} ₫</Text><Text style={styles.v2PlaceSub}>Budget used · 42%</Text></View>
+          {expenses.map((item) => <View key={item.id} style={styles.tripListRow}><View style={styles.v2QuickIcon}><CircleDollarSign color={colors.primary} size={20} /></View><Text style={[styles.timelineTitle, styles.flexOne]}>{item.label}</Text><Text style={styles.expenseRowAmount}>{item.amount.toLocaleString('vi-VN')} ₫</Text></View>)}
+          <View style={styles.expenseInputRow}><TextInput value={expense} onChangeText={setExpense} keyboardType="numeric" placeholder="New expense (VND)" placeholderTextColor={colors.muted} style={styles.expenseInput} /><Pressable style={styles.expenseAdd} onPress={() => { const amount = Number(expense.replace(/\D/g, '')); if (amount > 0) { setExpenses((current) => [...current, { id: `${Date.now()}`, label: 'Other', amount }]); setExpense(''); } }}><Plus color={colors.surface} size={20} /></Pressable></View>
+        </View>
+      ) : null}
+
+      {tab === 'notes' ? (
+        <View style={styles.tripSection}><Text style={styles.homeSectionTitle}>Trip notes</Text><TextInput multiline value={note} onChangeText={setNote} placeholder="Add ideas, booking codes or reminders..." placeholderTextColor={colors.muted} style={styles.tripNoteInput} /><Text style={styles.v2PlaceSub}>Saved automatically on this device.</Text></View>
+      ) : null}
+    </ScrollView>
+  );
+}
+
+function SavedHubScreen({
+  records,
+  history,
+  recentSearches,
+  onOpenPlace,
+  onOpenFood,
+  onClearHistory,
+  t,
+}: {
+  records: Parameters<typeof FavoritesScreen>[0]['records'];
+  history: ActivityHistoryEntry[];
+  recentSearches: RecentSearch[];
+  onOpenPlace: (id: string) => void;
+  onOpenFood: (id: string) => void;
+  onClearHistory: () => void;
+  t: (key: TranslationKey) => string;
+}) {
+  const [tab, setTab] = useState<'saved' | 'history' | 'searches'>('saved');
+  return (
+    <View style={styles.flexOne}>
+      <View style={styles.savedHubHeader}><Text style={styles.exploreTitle}>Saved</Text><Text style={styles.exploreSubtitle}>Your places, foods, trips and activity</Text></View>
+      <View style={styles.savedHubTabs}>
+        {[{ id: 'saved', label: 'Favorites' }, { id: 'history', label: 'History' }, { id: 'searches', label: 'Recent search' }].map((item) => <Pressable key={item.id} style={[styles.savedHubTab, tab === item.id && styles.savedHubTabActive]} onPress={() => setTab(item.id as typeof tab)}><Text style={[styles.savedHubTabText, tab === item.id && styles.savedHubTabTextActive]}>{item.label}</Text></Pressable>)}
+      </View>
+      {tab === 'saved' ? <FavoritesScreen records={records} onOpenPlace={onOpenPlace} onOpenFood={onOpenFood} t={t} /> : null}
+      {tab === 'history' ? <HistoryScreen entries={history} onClear={onClearHistory} t={t} /> : null}
+      {tab === 'searches' ? <ScrollView contentContainerStyle={styles.favoritesList}>{recentSearches.length ? recentSearches.map((item) => <View key={item.id} style={styles.tripListRow}><View style={styles.v2QuickIcon}><SearchIcon color={colors.primary} size={19} /></View><View style={styles.flexOne}><Text style={styles.timelineTitle}>{item.query}</Text><Text style={styles.v2PlaceSub}>{formatHistoryTimestamp(item.timestamp)}</Text></View></View>) : <EmptyState icon={SearchIcon} title="No recent searches" body="Your searches and AI requests will appear here." />}</ScrollView> : null}
     </View>
   );
 }
@@ -3452,6 +4336,7 @@ function HistoryScreen({
 
 function AccountScreen({
   authSession,
+  guestSession,
   settings,
   currentLanguage,
   qrBusy,
@@ -3465,6 +4350,8 @@ function AccountScreen({
   onOpenSettings,
   onOpenLanguage,
   onOpenPrivacyPolicy,
+  onOpenMemberVideoCall,
+  onOpenLiveTeam,
   onOpenLocalHelperOnboarding,
   onOpenLocalHelperJobs,
   onOpenLocalHelperEarnings,
@@ -3474,6 +4361,7 @@ function AccountScreen({
   t,
 }: {
   authSession: AuthSessionState | null;
+  guestSession: GuestSession | null;
   settings: SettingsState;
   currentLanguage: Language;
   qrBusy: boolean;
@@ -3487,6 +4375,8 @@ function AccountScreen({
   onOpenSettings: () => void;
   onOpenLanguage: () => void;
   onOpenPrivacyPolicy: () => void;
+  onOpenMemberVideoCall: () => void;
+  onOpenLiveTeam: () => void;
   onOpenLocalHelperOnboarding: () => void;
   onOpenLocalHelperJobs: () => void;
   onOpenLocalHelperEarnings: () => void;
@@ -3533,8 +4423,8 @@ function AccountScreen({
           <View style={styles.accountAvatar}>
             <User color={colors.primary} size={32} />
           </View>
-          <Text style={styles.accountName}>{t('account.notSignedIn.title')}</Text>
-          <Text style={styles.accountEmail}>{t('account.notSignedIn.body')}</Text>
+          <Text style={styles.accountName}>{guestSession?.user.name ?? t('account.notSignedIn.title')}</Text>
+          <Text style={styles.accountEmail}>{guestSession ? guestModeLabels[currentLanguage] : t('account.notSignedIn.body')}</Text>
           <PrimaryButton
             label={isGoogleAuthPending ? t('auth.signingIn') : t('account.signIn')}
             onPress={onSignIn}
@@ -3577,14 +4467,14 @@ function AccountScreen({
         <View style={styles.accountRow}>
           <Text style={styles.accountRowLabel}>{t('account.displayName')}</Text>
           <Text style={styles.accountRowValue}>
-            {authSession?.user.name ?? 'Guest'}
+            {authSession?.user.name ?? guestSession?.user.name ?? 'Guest'}
           </Text>
           <ChevronRight color={colors.muted} size={18} />
         </View>
         <View style={styles.accountRow}>
           <Text style={styles.accountRowLabel}>{t('account.email')}</Text>
           <Text style={styles.accountRowValue}>
-            {authSession?.user.email ?? '—'}
+            {authSession?.user.email ?? (guestSession ? guestModeLabels[currentLanguage] : '—')}
           </Text>
           <ChevronRight color={colors.muted} size={18} />
         </View>
@@ -3623,6 +4513,16 @@ function AccountScreen({
       </View>
 
       <View style={styles.accountSection}>
+        <Pressable style={styles.accountRow} onPress={onOpenLiveTeam}>
+          <Radio color={colors.primary} size={20} />
+          <Text style={styles.accountRowLabel}>Live Team · Thoại & GPS</Text>
+          <ChevronRight color={colors.muted} size={18} />
+        </Pressable>
+        <Pressable style={styles.accountRow} onPress={onOpenMemberVideoCall}>
+          <MessageCircle color={colors.primary} size={20} />
+          <Text style={styles.accountRowLabel}>Chat và gọi miễn phí</Text>
+          <ChevronRight color={colors.muted} size={18} />
+        </Pressable>
         <Pressable style={styles.accountRow} onPress={onOpenSettings}>
           <SettingsIcon color={colors.primary} size={20} />
           <Text style={styles.accountRowLabel}>{t('account.settings')}</Text>
@@ -3673,62 +4573,138 @@ function AccountScreen({
 function SearchScreen({
   places: placeItems,
   recentSearches,
+  userCoordinates,
   onSubmitSearch,
   onClearRecent,
   onOpenPlace,
   onOpenFood,
+  onOpenMap,
   t,
 }: {
   places: Place[];
   recentSearches: RecentSearch[];
+  userCoordinates: AppCoordinates | null;
   onSubmitSearch: (query: string) => void;
   onClearRecent: () => void;
   onOpenPlace: (id: string) => void;
   onOpenFood: (id: string) => void;
+  onOpenMap: () => void;
   t: (key: TranslationKey) => string;
 }) {
+  const { width } = useWindowDimensions();
   const [query, setQuery] = useState('');
+  const [activeCategory, setActiveCategory] = useState<'all' | 'popular' | 'nature' | 'culture' | 'food'>('all');
+  const isCompact = width < 720;
+  const categoryFilters: { id: typeof activeCategory; label: string; icon: typeof MapPin }[] = [
+    { id: 'all', label: t('explore.allCities'), icon: Compass },
+    { id: 'popular', label: t('search.popularPlaces'), icon: Star },
+    { id: 'nature', label: t('home.quick.stay'), icon: Mountain },
+    { id: 'culture', label: t('home.tool.culture'), icon: BookOpen },
+    { id: 'food', label: t('home.tool.food'), icon: Utensils },
+  ];
   const results = useMemo(() => {
     const q = normalizeSearchText(query.trim());
-    if (q.length === 0) {
-      return { places: popularPlaceIds.map((id) => placeItems.find((p) => p.id === id)).filter(Boolean) as Place[], foods: popularFoodIds.map((id) => foods.find((f) => f.id === id)).filter(Boolean) as Food[] };
-    }
-    return {
-      places: placeItems.filter((p) =>
-        normalizeSearchText(`${p.name} ${p.city} ${p.category} ${p.tags.join(' ')}`).includes(q),
-      ),
-      foods: foods.filter((f) =>
-        normalizeSearchText(`${f.name} ${f.englishName} ${f.region}`).includes(q),
-      ),
+    const popularIds = new Set(popularPlaceIds);
+    const categoryMatches = (place: Place) => {
+      const haystack = normalizeSearchText(`${place.category} ${place.tags.join(' ')}`);
+      if (activeCategory === 'popular') return popularIds.has(place.id);
+      if (activeCategory === 'nature') return /bien|bai|vinh|nui|hang|dao|rung|thac|nature|beach|mountain|cave|island|bay/.test(haystack);
+      if (activeCategory === 'culture') return /van hoa|di san|di tich|lich su|ton giao|heritage|culture|history|temple|pagoda/.test(haystack);
+      return true;
     };
-  }, [placeItems, query]);
+    const matchingPlaces = placeItems
+      .filter((place) => categoryMatches(place))
+      .filter((place) => q.length === 0 || normalizeSearchText(`${place.name} ${place.city} ${place.category} ${place.tags.join(' ')}`).includes(q))
+      .map((place) => ({
+        place,
+        distanceKm: userCoordinates ? getDistanceKm(userCoordinates, { lat: place.lat, lng: place.lng }) : null,
+      }))
+      .sort((a, b) => {
+        if (q.length === 0 && activeCategory === 'all') return Number(popularIds.has(b.place.id)) - Number(popularIds.has(a.place.id));
+        if (q.length > 0) {
+          const relevance = (place: Place) => {
+            const name = normalizeSearchText(place.name);
+            if (name === q) return 3;
+            if (name.startsWith(q)) return 2;
+            if (name.includes(q)) return 1;
+            return 0;
+          };
+          const relevanceDifference = relevance(b.place) - relevance(a.place);
+          if (relevanceDifference !== 0) return relevanceDifference;
+        }
+        const popularityDifference = Number(popularIds.has(b.place.id)) - Number(popularIds.has(a.place.id));
+        if (popularityDifference !== 0) return popularityDifference;
+        if (a.distanceKm !== null && b.distanceKm !== null) return a.distanceKm - b.distanceKm;
+        return a.place.name.localeCompare(b.place.name);
+      })
+      .slice(0, q.length === 0 && activeCategory === 'all' ? 12 : 40);
+    return {
+      places: matchingPlaces.map(({ place }) => place),
+      distances: new Map(matchingPlaces.map(({ place, distanceKm }) => [place.id, distanceKm])),
+      foods: activeCategory === 'food' || activeCategory === 'all'
+        ? foods.filter((f) =>
+            normalizeSearchText(`${f.name} ${f.englishName} ${f.region}`).includes(q),
+          ).slice(0, q.length === 0 ? 5 : 20)
+        : [],
+    };
+  }, [activeCategory, placeItems, query, userCoordinates]);
   const { data: translatedResultPlaces } = useTranslatedData(results.places);
   const { data: translatedResultFoods } = useTranslatedData(results.foods);
 
+  const submitLocalSearch = () => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    if (results.places[0]) return onOpenPlace(results.places[0].id);
+    if (results.foods[0]) return onOpenFood(results.foods[0].id);
+    onSubmitSearch(trimmed);
+  };
+
   return (
-    <View style={styles.flexOne}>
-      <View style={styles.searchTopRow}>
+    <View style={styles.searchScreen}>
+      <View style={styles.searchHero}>
         <View style={styles.searchInput}>
-          <SearchIcon color={colors.muted} size={18} />
+          <SearchIcon color={colors.text} size={20} />
           <TextInput
             value={query}
-            onChangeText={setQuery}
+            onChangeText={(value) => { setQuery(value); if (value.trim()) setActiveCategory('all'); }}
             placeholder={t('search.placeholder')}
             placeholderTextColor={colors.muted}
             style={styles.searchInputField}
             returnKeyType="search"
-            onSubmitEditing={() => onSubmitSearch(query)}
+            autoCapitalize="none"
+            autoCorrect={false}
+            onSubmitEditing={submitLocalSearch}
           />
           {query.length > 0 ? (
-            <Pressable onPress={() => setQuery('')}>
+            <Pressable accessibilityLabel="Clear search" hitSlop={10} onPress={() => setQuery('')}>
               <X color={colors.muted} size={18} />
             </Pressable>
           ) : null}
         </View>
+        <ScrollView horizontal contentContainerStyle={styles.searchCategoryRow} showsHorizontalScrollIndicator={false}>
+          {categoryFilters.map(({ id, label, icon: Icon }) => (
+            <Pressable key={id} style={[styles.searchCategoryChip, activeCategory === id && styles.searchCategoryChipActive]} onPress={() => { setActiveCategory(id); if (id !== 'all') setQuery(''); }}>
+              <Icon color={activeCategory === id ? colors.surface : colors.text} size={16} />
+              <Text style={[styles.searchCategoryText, activeCategory === id && styles.searchCategoryTextActive]}>{label}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
       </View>
       <ScrollView contentContainerStyle={styles.searchContent} showsVerticalScrollIndicator={false}>
-        {query.trim().length === 0 && recentSearches.length > 0 ? (
-          <View>
+        <View style={[styles.searchMapBanner, !isCompact && styles.searchMapBannerWide]}>
+          <View style={styles.searchMapIcon}><MapIcon color={colors.primary} size={22} /></View>
+          <View style={styles.flexOne}>
+            <Text style={styles.searchMapTitle}>{t('map.title')}</Text>
+            <Text style={styles.searchMapBody}>{userCoordinates ? `${t('home.tool.nearby')} · ${results.places.length} ${t('home.catalogPlaces')}` : t('map.subtitle')}</Text>
+          </View>
+          <Pressable style={styles.searchMapButton} onPress={onOpenMap}>
+            <Text style={styles.searchMapButtonText}>{t('home.tool.map')}</Text>
+            <ChevronRight color={colors.surface} size={16} />
+          </Pressable>
+        </View>
+
+        {query.trim().length === 0 && activeCategory === 'all' && recentSearches.length > 0 ? (
+          <View style={styles.searchSection}>
             <View style={styles.searchSectionHeader}>
               <Text style={styles.searchSectionTitle}>{t('search.recent')}</Text>
               <Pressable onPress={onClearRecent}>
@@ -3740,7 +4716,7 @@ function SearchScreen({
                 <Pressable
                   key={s.id}
                   style={styles.recentChip}
-                  onPress={() => onSubmitSearch(s.query)}
+                  onPress={() => setQuery(s.query)}
                 >
                   <Clock color={colors.muted} size={13} />
                   <Text style={styles.recentChipText}>{s.query}</Text>
@@ -3750,58 +4726,45 @@ function SearchScreen({
           </View>
         ) : null}
 
-        {query.trim().length === 0 ? (
-          <View style={styles.searchSection}>
-            <Text style={styles.searchSectionTitle}>{t('search.suggestions')}</Text>
-            <View style={styles.popularGrid}>
-              {translatedResultPlaces.slice(0, 4).map((place) => (
-                <Pressable
-                  key={place.id}
-                  style={styles.popularGridCard}
-                  onPress={() => onOpenPlace(place.id)}
-                >
-                  <Image source={place.image} style={styles.popularGridImage} />
-                  <Text style={styles.popularGridName}>{place.name}</Text>
-                </Pressable>
-              ))}
+        <View style={styles.searchSection}>
+          <View style={styles.searchResultsHeader}>
+            <View>
+              <Text style={styles.searchSectionTitle}>{query.trim() ? t('search.allResults') : t('home.popularTitle')}</Text>
+              <Text style={styles.searchResultCount}>{results.places.length} {t('home.catalogPlaces')}{results.foods.length ? ` · ${results.foods.length} ${t('home.tool.food')}` : ''}</Text>
             </View>
+            <View style={styles.searchSortPill}><Navigation color={colors.primary} size={14} /><Text style={styles.searchSortText}>{userCoordinates ? t('home.tool.nearby') : t('search.related')}</Text></View>
           </View>
-        ) : (
-          <View>
-            {results.places.length === 0 && results.foods.length === 0 ? (
-              <EmptyState
-                icon={SearchIcon}
-                title={t('search.noResults')}
-                body={t('search.noResultsBody')}
-              />
-            ) : (
-              <>
+          {results.places.length === 0 && results.foods.length === 0 ? (
+            <EmptyState
+              icon={SearchIcon}
+              title={t('search.noResults')}
+              body={t('search.noResultsBody')}
+            />
+          ) : (
+            <>
                 {results.places.length > 0 ? (
-                  <View>
-                    <Text style={styles.searchSectionTitle}>
-                      {t('search.popularPlaces')}
-                    </Text>
+                  <View style={styles.searchResultList}>
                     {translatedResultPlaces.map((place) => (
                       <Pressable
                         key={place.id}
-                        style={styles.searchResultRow}
+                        style={[styles.searchResultRow, !isCompact && styles.searchResultRowWide]}
                         onPress={() => onOpenPlace(place.id)}
                       >
                         <Image source={place.image} style={styles.searchResultImage} />
-                        <View style={styles.flexOne}>
-                          <Text style={styles.favoriteName}>{place.name}</Text>
-                          <Text style={styles.favoriteSub}>{place.city}</Text>
+                        <View style={styles.searchResultCopy}>
+                          <Text numberOfLines={1} style={styles.searchResultName}>{place.name}</Text>
+                          <View style={styles.searchRatingRow}><Text style={styles.searchRatingText}>4.8</Text><Star color="#f59e0b" fill="#f59e0b" size={14} /><Text style={styles.searchReviewText}>· {place.category}</Text></View>
+                          <Text numberOfLines={1} style={styles.searchResultMeta}>{place.city}{results.distances.get(place.id) !== null && results.distances.get(place.id) !== undefined ? ` · ${roundDistanceKm(results.distances.get(place.id) as number)} km` : ''}</Text>
+                          <Text numberOfLines={1} style={styles.searchOpenText}>{place.openHours}</Text>
                         </View>
-                        <ChevronRight color={colors.muted} size={18} />
+                        <View style={styles.searchResultAction}><MapPin color={colors.primary} size={19} /></View>
                       </Pressable>
                     ))}
                   </View>
                 ) : null}
                 {results.foods.length > 0 ? (
-                  <View>
-                    <Text style={styles.searchSectionTitle}>
-                      {t('search.popularFoods')}
-                    </Text>
+                  <View style={styles.searchResultList}>
+                    <Text style={styles.searchSubsectionTitle}>{t('search.popularFoods')}</Text>
                     {translatedResultFoods.map((food) => (
                       <Pressable
                         key={food.id}
@@ -3809,19 +4772,20 @@ function SearchScreen({
                         onPress={() => onOpenFood(food.id)}
                       >
                         <Image source={food.image} style={styles.searchResultImage} />
-                        <View style={styles.flexOne}>
-                          <Text style={styles.favoriteName}>{food.name}</Text>
-                          <Text style={styles.favoriteSub}>{food.region}</Text>
+                        <View style={styles.searchResultCopy}>
+                          <Text numberOfLines={1} style={styles.searchResultName}>{food.name}</Text>
+                          <View style={styles.searchRatingRow}><Text style={styles.searchRatingText}>4.7</Text><Star color="#f59e0b" fill="#f59e0b" size={14} /><Text style={styles.searchReviewText}>· {food.region}</Text></View>
+                          <Text numberOfLines={1} style={styles.searchResultMeta}>{food.englishName}</Text>
+                          <Text style={styles.searchOpenText}>{food.priceRange}</Text>
                         </View>
-                        <ChevronRight color={colors.muted} size={18} />
+                        <View style={styles.searchResultAction}><Utensils color={colors.primary} size={18} /></View>
                       </Pressable>
                     ))}
                   </View>
                 ) : null}
               </>
             )}
-          </View>
-        )}
+        </View>
       </ScrollView>
     </View>
   );
@@ -3832,11 +4796,13 @@ function SettingsScreen({
   onUpdateSettings,
   onBack,
   t,
+  onOpenWpConfig,
 }: {
   settings: SettingsState;
   onUpdateSettings: (patch: Partial<SettingsState>) => void;
   onBack: () => void;
   t: (key: TranslationKey) => string;
+  onOpenWpConfig?: () => void;
 }) {
   return (
     <ScrollView contentContainerStyle={styles.settingsContent} showsVerticalScrollIndicator={false}>
@@ -3915,6 +4881,18 @@ function SettingsScreen({
           </View>
         </View>
       </View>
+      <Pressable
+        style={styles.settingsRow}
+        onPress={() => onOpenWpConfig && onOpenWpConfig()}
+      >
+        <View style={styles.flexOne}>
+          <Text style={styles.settingsRowTitle}>📰 Nguồn tin tức WordPress</Text>
+          <Text style={styles.settingsRowBody} numberOfLines={1}>
+            {settings.wpNewsUrl || DEFAULT_WP_URL}
+          </Text>
+        </View>
+        <ChevronRight color={colors.muted} size={18} />
+      </Pressable>
       <View style={styles.settingsRow}>
         <View style={styles.flexOne}>
           <Text style={styles.settingsRowTitle}>{t('settings.version.title')}</Text>
@@ -4045,6 +5023,151 @@ function FilterScreen({
   );
 }
 
+const banknotePalette: Record<number, { background: string; accent: string; label: string }> = {
+  1000: { background: '#d7c6ad', accent: '#755b3d', label: 'One thousand' },
+  2000: { background: '#d9b998', accent: '#7f4f2d', label: 'Two thousand' },
+  5000: { background: '#9ec8ba', accent: '#245f51', label: 'Five thousand' },
+  10000: { background: '#e4bf9b', accent: '#8a4e20', label: 'Ten thousand' },
+  20000: { background: '#c3a9d8', accent: '#5e3a78', label: 'Twenty thousand' },
+  50000: { background: '#d8a9b4', accent: '#7e3348', label: 'Fifty thousand' },
+  100000: { background: '#b7d5a2', accent: '#3f6f2e', label: 'One hundred thousand' },
+  200000: { background: '#d7b78d', accent: '#765022', label: 'Two hundred thousand' },
+  500000: { background: '#a8c9c4', accent: '#275f59', label: 'Five hundred thousand' },
+};
+
+const banknoteImages: Record<number, ImageSourcePropType> = {
+  1000: require('./assets/currency/vnd-1000-both-hd.webp'),
+  2000: require('./assets/currency/vnd-2000-both-hd.webp'),
+  5000: require('./assets/currency/vnd-5000-both-hd.webp'),
+  10000: require('./assets/currency/vnd-10000-both-hd.webp'),
+  20000: require('./assets/currency/vnd-20000-both-hd.webp'),
+  50000: require('./assets/currency/vnd-50000-both-hd.webp'),
+  100000: require('./assets/currency/vnd-100000-both-hd.webp'),
+  200000: require('./assets/currency/vnd-200000-both-hd.webp'),
+  500000: require('./assets/currency/vnd-500000-both-hd.webp'),
+};
+
+function BanknoteVisual({ value, onPress }: { value: number; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityLabel={`View ${value.toLocaleString('vi-VN')} đồng larger`}
+      onPress={onPress}
+      style={styles.banknoteImageFrame}
+    >
+      <Image
+        accessibilityLabel={`${value.toLocaleString('vi-VN')} đồng, front and back`}
+        source={banknoteImages[value]}
+        style={styles.banknoteImage}
+        resizeMode="contain"
+      />
+      <View style={styles.banknoteZoomHint}><SearchIcon color={colors.surface} size={14} /><Text style={styles.banknoteZoomText}>Tap to enlarge</Text></View>
+    </Pressable>
+  );
+}
+
+function CurrencyScreen({ profile, locationLabel }: { profile: UserProfile; locationLabel: string | null }) {
+  const [currency, setCurrency] = useState<'USD' | 'EUR' | 'GBP' | 'AUD' | 'JPY' | 'KRW' | 'CNY' | 'THB'>('USD');
+  const [amount, setAmount] = useState('10');
+  const [priceTab, setPriceTab] = useState<'all' | 'transport' | 'food' | 'stay' | 'connect'>('all');
+  const [selectedBanknote, setSelectedBanknote] = useState<number | null>(null);
+  const rates = { USD: 26300, EUR: 30500, GBP: 35200, AUD: 17300, JPY: 178, KRW: 19, CNY: 3660, THB: 815 } as const;
+  const parsedAmount = Number(amount.replace(',', '.')) || 0;
+  const converted = Math.round(parsedAmount * rates[currency]);
+  const city = locationLabel || (profile.currentCity === 'Other' ? 'TP. Hồ Chí Minh' : profile.currentCity);
+  const normalizedCity = normalizeSearchText(city);
+  const cityFactor = ['phu quoc', 'hoi an', 'nha trang', 'da nang'].some((item) => normalizedCity.includes(item))
+    ? 1.12
+    : ['ho chi minh', 'ha noi'].some((item) => normalizedCity.includes(item))
+      ? 1
+      : 0.92;
+  const compactVnd = (value: number) => value >= 1000000
+    ? `${(value / 1000000).toLocaleString('en-US', { maximumFractionDigits: 2 })}m`
+    : `${Math.round(value / 1000)}k`;
+  const price = (min: number, max: number) => `${compactVnd(min * cityFactor)}–${compactVnd(max * cityFactor)} ₫`;
+  const services: { id: string; category: typeof priceTab; title: string; detail: string; value: string; icon: typeof Home; source: string }[] = [
+    { id: 'grabcar', category: 'transport', title: 'GrabCar · first 2 km', detail: '+ 9.8k/km and time fee; platform fee may apply', value: '28.5k ₫', icon: Navigation, source: 'Grab Vietnam' },
+    { id: 'grabbike', category: 'transport', title: 'GrabBike · first 2 km', detail: '+ 4.2k/km and time fee; 3k platform fee', value: '12.3k ₫', icon: Navigation, source: 'Grab Vietnam' },
+    { id: 'taxi-airport', category: 'transport', title: 'Airport taxi', detail: city === 'TP. Hồ Chí Minh' ? 'Tân Sơn Nhất ↔ central districts' : 'Typical airport transfer; check final app fare', value: city === 'TP. Hồ Chí Minh' ? '120k–170k ₫' : price(140000, 330000), icon: Plane, source: 'Vietnam Tourism' },
+    { id: 'motorbike', category: 'transport', title: 'Motorbike rental · per day', detail: 'Helmet normally included; check licence and insurance', value: price(155000, 315000), icon: Navigation, source: 'Vietnam Tourism' },
+    { id: 'esim10', category: 'connect', title: 'Tourist eSIM · 10 days', detail: '50 GB + 70 domestic minutes', value: '150k ₫', icon: Wifi, source: 'MobiFone Travel' },
+    { id: 'esim30', category: 'connect', title: 'Tourist eSIM · 30 days', detail: '150 GB + 200 domestic minutes', value: '250k ₫', icon: Wifi, source: 'MobiFone Travel' },
+    { id: 'streetfood', category: 'food', title: 'Street food / local dish', detail: 'Bánh mì, cơm, noodles or market snack', value: price(20000, 75000), icon: Utensils, source: 'Vietnam Travel Budget 2026' },
+    { id: 'localmeal', category: 'food', title: 'Local restaurant meal', detail: 'Sit-down meal, usually per person', value: price(80000, 210000), icon: Utensils, source: 'Vietnam Travel Budget 2026' },
+    { id: 'coffee', category: 'food', title: 'Vietnamese coffee', detail: 'Street stall to modern local café', value: price(15000, 65000), icon: Coffee, source: 'Vietnam Travel Budget 2026' },
+    { id: 'hostel', category: 'stay', title: 'Hostel dorm · per night', detail: `Typical range in ${city}`, value: price(130000, 315000), icon: Home, source: 'Vietnam Travel Budget 2026' },
+    { id: 'private', category: 'stay', title: 'Guesthouse/private room', detail: `Air-con and Wi-Fi in ${city}`, value: price(390000, 1050000), icon: Home, source: 'Vietnam Travel Budget 2026' },
+    { id: 'hotel3', category: 'stay', title: '3-star hotel · per night', detail: `Average booking range in ${city}`, value: price(920000, 1840000), icon: Home, source: 'Vietnam Travel Budget 2026' },
+  ];
+  const filteredServices = priceTab === 'all' ? services : services.filter((item) => item.category === priceTab);
+
+  return (
+    <ScrollView contentContainerStyle={styles.currencyContent} showsVerticalScrollIndicator={false}>
+      <View style={styles.currencyHero}>
+        <Text style={styles.currencyEyebrow}>VIETNAMESE ĐỒNG · VND</Text>
+        <Text style={styles.currencyTitle}>Money made simple</Text>
+        <Text style={styles.currencySubtitle}>Recognise banknotes, convert quickly and know a fair price before paying.</Text>
+      </View>
+
+      <View style={styles.currencySection}>
+        <View style={styles.homeSectionHeader}><Text style={styles.homeSectionTitle}>Quick converter</Text><Text style={styles.currencyUpdated}>13 Jul 2026</Text></View>
+        <View style={styles.converterCard}>
+          <View style={styles.converterInputRow}>
+            <TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" style={styles.converterInput} accessibilityLabel="Foreign currency amount" />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.currencyCodeRow}>
+              {(Object.keys(rates) as (keyof typeof rates)[]).map((code) => <Pressable key={code} style={[styles.currencyCode, currency === code && styles.currencyCodeActive]} onPress={() => setCurrency(code)}><Text style={[styles.currencyCodeText, currency === code && styles.currencyCodeTextActive]}>{code}</Text></Pressable>)}
+            </ScrollView>
+          </View>
+          <Text style={styles.converterEquals}>=</Text>
+          <Text style={styles.converterResult}>{converted.toLocaleString('vi-VN')} ₫</Text>
+          <Text style={styles.converterRate}>Estimate: 1 {currency} ≈ {rates[currency].toLocaleString('vi-VN')} ₫ · Compare the exchange counter's buy rate.</Text>
+        </View>
+      </View>
+
+      <View style={styles.currencySection}>
+        <Text style={styles.homeSectionTitle}>Common banknotes</Text>
+        <Text style={styles.currencySectionHint}>Front and back photo guide — verify the printed denomination before paying.</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.banknoteRail}>
+          {Object.keys(banknotePalette).map((value) => <View key={value} style={styles.banknoteCard}><BanknoteVisual value={Number(value)} onPress={() => setSelectedBanknote(Number(value))} /><Text style={styles.banknoteCardValue}>{Number(value).toLocaleString('vi-VN')} đồng</Text></View>)}
+        </ScrollView>
+      </View>
+
+      <View style={styles.moneyTipCard}>
+        <View style={styles.v2QuickIcon}><Info color={colors.primary} size={21} /></View>
+        <View style={styles.flexOne}><Text style={styles.timelineTitle}>The “drop three zeros” trick</Text><Text style={styles.currencySectionHint}>50,000₫ → think “50”. 200,000₫ → “200”. A price written as 120k means 120,000₫. Dots and commas are often thousand separators in Vietnam.</Text></View>
+      </View>
+
+      <View style={styles.currencySection}>
+        <View style={styles.priceCityHeader}><View><Text style={styles.homeSectionTitle}>Typical prices near you</Text><Text style={styles.currencySectionHint}>{city} · indicative range, July 2026</Text></View><View style={styles.cityPricePill}><MapPin color={colors.primary} size={15} /><Text style={styles.cityPriceText}>{city}</Text></View></View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.priceTabRow}>
+          {([{ id: 'all', label: 'All' }, { id: 'transport', label: 'Transport' }, { id: 'food', label: 'Food' }, { id: 'stay', label: 'Stay' }, { id: 'connect', label: '4G / SIM' }] as const).map((item) => <Pressable key={item.id} style={[styles.priceTab, priceTab === item.id && styles.priceTabActive]} onPress={() => setPriceTab(item.id)}><Text style={[styles.priceTabText, priceTab === item.id && styles.priceTabTextActive]}>{item.label}</Text></Pressable>)}
+        </ScrollView>
+        <View style={styles.priceList}>
+          {filteredServices.map(({ id, title, detail, value, icon: Icon, source }) => <View key={id} style={styles.priceRowCard}><View style={styles.v2QuickIcon}><Icon color={colors.primary} size={20} /></View><View style={styles.flexOne}><Text style={styles.priceTitle}>{title}</Text><Text style={styles.priceDetail}>{detail}</Text><Text style={styles.priceSource}>Source: {source}</Text></View><Text style={styles.priceValue}>{value}</Text></View>)}
+        </View>
+      </View>
+
+      <View style={styles.currencySafetyCard}><ShieldAlert color={colors.warning} size={21} /><View style={styles.flexOne}><Text style={styles.timelineTitle}>Pay safely</Text><Text style={styles.currencySectionHint}>Confirm taxi/app fare before riding, count change carefully, avoid damaged notes and use licensed exchange counters. Dynamic ride prices can rise during rain and peak hours.</Text></View></View>
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setSelectedBanknote(null)}
+        transparent
+        visible={selectedBanknote !== null}
+      >
+        <View style={styles.banknoteModalBackdrop}>
+          <Pressable accessibilityLabel="Close banknote preview" onPress={() => setSelectedBanknote(null)} style={styles.banknoteModalClose}><X color={colors.surface} size={24} /></Pressable>
+          {selectedBanknote !== null ? (
+            <>
+              <Image accessibilityLabel={`${selectedBanknote.toLocaleString('vi-VN')} đồng enlarged`} source={banknoteImages[selectedBanknote]} style={styles.banknoteModalImage} resizeMode="contain" />
+              <Text style={styles.banknoteModalTitle}>{selectedBanknote.toLocaleString('vi-VN')} đồng</Text>
+              <Text style={styles.banknoteModalHint}>Front and back · tap × to close</Text>
+            </>
+          ) : null}
+        </View>
+      </Modal>
+    </ScrollView>
+  );
+}
+
 function OfflineScreen({ onRetry, t }: { onRetry: () => void; t: (key: TranslationKey) => string }) {
   return (
     <ScrollView contentContainerStyle={styles.offlineContent} showsVerticalScrollIndicator={false}>
@@ -4056,18 +5179,22 @@ function OfflineScreen({ onRetry, t }: { onRetry: () => void; t: (key: Translati
         <Text style={styles.offlineSubtitle}>{t('offline.subtitle')}</Text>
       </View>
       <View style={styles.offlineCard}>
-        <Text style={styles.offlineCardTitle}>{t('offline.cached')}</Text>
+        <Text style={styles.offlineCardTitle}>Downloaded cities & packs</Text>
         <View style={styles.offlineItem}>
           <Check color={colors.success} size={18} />
-          <Text style={styles.offlineItemText}>Địa điểm đã xem</Text>
+          <Text style={styles.offlineItemText}>Hồ Chí Minh City guide · 48 MB</Text>
         </View>
         <View style={styles.offlineItem}>
           <Check color={colors.success} size={18} />
-          <Text style={styles.offlineItemText}>Món ăn đã lưu</Text>
+          <Text style={styles.offlineItemText}>Offline map & saved places</Text>
         </View>
         <View style={styles.offlineItem}>
           <Check color={colors.success} size={18} />
-          <Text style={styles.offlineItemText}>Lịch trình đã tạo</Text>
+          <Text style={styles.offlineItemText}>Vietnamese phrase & translator pack</Text>
+        </View>
+        <View style={styles.offlineItem}>
+          <Check color={colors.success} size={18} />
+          <Text style={styles.offlineItemText}>Emergency guide & SOS translations</Text>
         </View>
       </View>
       <View style={styles.offlineCard}>
@@ -4090,16 +5217,32 @@ function OfflineScreen({ onRetry, t }: { onRetry: () => void; t: (key: Translati
   );
 }
 
-function MapScreen({ place, onBack, t }: { place: Place | null; onBack: () => void; t: (key: TranslationKey) => string }) {
+function MapScreen({
+  place,
+  userCoordinates,
+  locationLabel,
+  onBack,
+  t,
+}: {
+  place: Place | null;
+  userCoordinates: AppCoordinates | null;
+  locationLabel: string | null;
+  onBack: () => void;
+  t: (key: TranslationKey) => string;
+}) {
   const { data: translatedPlace } = useTranslatedData(place);
-  const center = place ? { lat: place.lat, lng: place.lng } : { lat: 16.054, lng: 108.202 };
-  const zoom = place ? 14 : 5;
+  const center = place
+    ? { lat: place.lat, lng: place.lng }
+    : userCoordinates
+      ? { lat: userCoordinates.lat, lng: userCoordinates.lng }
+      : { lat: 16.054, lng: 108.202 };
+  const zoom = place || userCoordinates ? 14 : 5;
   const mapHtml = buildOpenStreetMapHtml({
     lat: center.lat,
     lng: center.lng,
     zoom,
-    title: translatedPlace?.name,
-    subtitle: translatedPlace?.category,
+    title: translatedPlace?.name || locationLabel || (userCoordinates ? 'Current location' : undefined),
+    subtitle: translatedPlace?.category || (userCoordinates ? 'You are here' : undefined),
     attribution: t('map.attribution'),
     loading: t('map.loading'),
     unavailable: t('map.unavailable'),
@@ -4140,6 +5283,14 @@ function MapScreen({ place, onBack, t }: { place: Place | null; onBack: () => vo
                 <ChevronRight color={colors.surface} size={16} />
               </Pressable>
             </View>
+          ) : userCoordinates ? (
+            <View style={styles.mapSheetContent}>
+              <View style={styles.mapPin}><Navigation color={colors.primary} size={20} /></View>
+              <View style={styles.flexOne}>
+                <Text style={styles.mapPinName}>{locationLabel || 'Current location'}</Text>
+                <Text style={styles.mapPinSub}>{userCoordinates.lat.toFixed(4)}, {userCoordinates.lng.toFixed(4)}</Text>
+              </View>
+            </View>
           ) : (
             <Text style={styles.mapSubtitle}>{t('map.subtitle')}</Text>
           )}
@@ -4159,19 +5310,288 @@ function AiScreen({
   tripStyle,
   onChangeTripDays,
   onChangeTripStyle,
+  currentCity,
+  currentLanguage,
+  locale,
+  isReplying,
   t,
 }: {
   messages: ChatMessage[];
   chatInput: string;
   onChangeInput: (text: string) => void;
-  onAsk: (q: string) => void;
+  onAsk: (q: string) => Promise<string | null>;
   onBuildItinerary: () => void;
   tripDays: number;
   tripStyle: TripStyle;
   onChangeTripDays: (d: number) => void;
   onChangeTripStyle: (s: TripStyle) => void;
+  currentCity: string;
+  currentLanguage: Language;
+  locale: Locale;
+  isReplying: boolean;
   t: (key: TranslationKey) => string;
 }) {
+  type AiFeatureId = 'chat' | 'planner' | 'voice' | 'camera' | 'ocr' | 'expense' | 'weather' | 'safety' | 'local';
+  const isVietnamese = locale === 'vi';
+  const city = currentCity === 'Other' ? 'Đà Nẵng' : currentCity;
+  const [selectedFeature, setSelectedFeature] = useState<AiFeatureId | null>(null);
+  const [featureInput, setFeatureInput] = useState('');
+  const [voiceActive, setVoiceActive] = useState(false);
+  const [scanMode, setScanMode] = useState<'food' | 'landmark' | 'sign'>('food');
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView>(null);
+  const [cameraFacing, setCameraFacing] = useState<CameraType>('back');
+  const [cameraActive, setCameraActive] = useState(false);
+  const [capturedImageUri, setCapturedImageUri] = useState<string | null>(null);
+  const [visionAnalysis, setVisionAnalysis] = useState<VisionAnalysis | null>(null);
+  const [visionLoading, setVisionLoading] = useState(false);
+  const [visionError, setVisionError] = useState<string | null>(null);
+  const [expenseInput, setExpenseInput] = useState('');
+  const [expenseCategory, setExpenseCategory] = useState('Food');
+  const [aiExpenses, setAiExpenses] = useState([
+    { id: 'stay', label: 'Hotel', amount: 1200000 },
+    { id: 'meal', label: 'Food', amount: 460000 },
+  ]);
+  const [featureResult, setFeatureResult] = useState<string | null>(null);
+  const [isFeatureReplying, setIsFeatureReplying] = useState(false);
+
+  const features: { id: AiFeatureId; title: string; description: string; icon: typeof Home; color: string; tint: string }[] = [
+    { id: 'chat', title: 'AI Chat', description: isVietnamese ? 'Hỏi đáp về Việt Nam' : 'Ask anything about Vietnam', icon: MessageCircle, color: '#7c3aed', tint: '#f3e8ff' },
+    { id: 'planner', title: 'AI Planner', description: isVietnamese ? 'Lịch trình theo ngân sách' : 'Plan around your budget', icon: CalendarCheck, color: '#2563eb', tint: '#dbeafe' },
+    { id: 'voice', title: 'AI Voice', description: isVietnamese ? 'Hội thoại bằng giọng nói' : 'Hands-free conversation', icon: Mic, color: '#db2777', tint: '#fce7f3' },
+    { id: 'camera', title: 'AI Camera', description: isVietnamese ? 'Nhận diện món ăn, địa danh' : 'Identify food and landmarks', icon: Camera, color: '#0891b2', tint: '#cffafe' },
+    { id: 'ocr', title: 'OCR Translate', description: isVietnamese ? 'Dịch menu, biển hiệu, hóa đơn' : 'Translate menus and receipts', icon: ScanLine, color: '#ea580c', tint: '#ffedd5' },
+    { id: 'expense', title: 'AI Expense', description: isVietnamese ? 'Theo dõi và phân tích chi phí' : 'Track and explain spending', icon: CircleDollarSign, color: '#16a34a', tint: '#dcfce7' },
+    { id: 'weather', title: 'Weather Advisor', description: isVietnamese ? 'Điều chỉnh lịch theo thời tiết' : 'Weather-aware trip changes', icon: CloudSun, color: '#ca8a04', tint: '#fef9c3' },
+    { id: 'safety', title: 'AI Safety', description: isVietnamese ? 'Cảnh báo và hỗ trợ khẩn cấp' : 'Alerts and emergency guidance', icon: ShieldAlert, color: '#dc2626', tint: '#fee2e2' },
+    { id: 'local', title: 'AI Local Guide', description: isVietnamese ? 'Trải nghiệm như người bản địa' : 'Explore like a local', icon: Compass, color: '#0f766e', tint: '#ccfbf1' },
+  ];
+
+  const selectedFeatureMeta = features.find((item) => item.id === selectedFeature) ?? null;
+  const totalExpense = aiExpenses.reduce((sum, item) => sum + item.amount, 0);
+
+  const runFeaturePrompt = async (prompt: string, speak = false) => {
+    if (!prompt.trim() || isFeatureReplying) return;
+    setIsFeatureReplying(true);
+    setFeatureResult(null);
+    try {
+      const answer = await onAsk(prompt);
+      setFeatureResult(answer);
+      if (speak && answer) {
+        Speech.stop();
+        Speech.speak(answer, { language: aiSpeechLocales[locale], rate: 0.92 });
+      }
+    } finally {
+      setIsFeatureReplying(false);
+    }
+  };
+
+  const openFeature = (id: AiFeatureId) => {
+    setFeatureResult(null);
+    setVisionAnalysis(null);
+    setVisionError(null);
+    setCapturedImageUri(null);
+    setCameraActive((id === 'camera' || id === 'ocr') && cameraPermission?.granted === true);
+    setVoiceActive(false);
+    setSelectedFeature(id);
+  };
+
+  const closeFeature = () => {
+    Speech.stop();
+    setVoiceActive(false);
+    setCameraActive(false);
+    setSelectedFeature(null);
+  };
+
+  const startVisionCamera = async () => {
+    setVisionError(null);
+    setVisionAnalysis(null);
+    setCapturedImageUri(null);
+    if (cameraPermission?.granted) {
+      setCameraActive(true);
+      return;
+    }
+    const permission = await requestCameraPermission();
+    if (permission.granted) {
+      setCameraActive(true);
+    } else {
+      setVisionError(isVietnamese ? 'Cần quyền camera để chụp và phân tích ảnh.' : 'Camera permission is required to capture and analyze an image.');
+    }
+  };
+
+  const captureAndAnalyze = async (mode: VisionAnalysisMode) => {
+    if (!cameraRef.current || visionLoading) return;
+    setVisionLoading(true);
+    setVisionError(null);
+    setVisionAnalysis(null);
+    try {
+      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.55 });
+      if (!photo?.base64) throw new Error(isVietnamese ? 'Không đọc được dữ liệu ảnh.' : 'The captured image data is unavailable.');
+      setCapturedImageUri(photo.uri);
+      setCameraActive(false);
+      const analysis = await analyzeTravelImage({
+        imageBase64: photo.base64,
+        mimeType: 'image/jpeg',
+        mode,
+        locale,
+        city,
+      });
+      setVisionAnalysis(analysis);
+    } catch (error) {
+      setCameraActive(false);
+      setVisionError(error instanceof Error ? error.message : (isVietnamese ? 'Không thể phân tích ảnh.' : 'Could not analyze this image.'));
+    } finally {
+      setVisionLoading(false);
+    }
+  };
+
+  const renderVisionResult = () => {
+    if (visionLoading) {
+      return <View style={styles.aiVisionLoading}><ActivityIndicator color={colors.primary} /><Text style={styles.timelineTitle}>{isVietnamese ? 'Gemini đang phân tích ảnh…' : 'Gemini is analyzing the image…'}</Text></View>;
+    }
+    if (visionError) {
+      return <View style={styles.aiVisionError}><Info color="#dc2626" size={19} /><Text selectable style={styles.aiResultText}>{visionError}</Text></View>;
+    }
+    if (!visionAnalysis) return null;
+    return (
+      <View style={styles.aiVisionResult}>
+        <View style={styles.aiVisionResultHeader}>
+          <View style={styles.flexOne}><Text selectable style={styles.aiFeatureLead}>{visionAnalysis.title}</Text><Text style={styles.v2PlaceSub}>{visionAnalysis.model ?? 'Gemini'} · {isVietnamese ? 'độ tin cậy' : 'confidence'}: {visionAnalysis.confidence}</Text></View>
+          <CircleCheck color={colors.success} size={22} />
+        </View>
+        {visionAnalysis.summary ? <Text selectable style={styles.aiVisionSummary}>{visionAnalysis.summary}</Text> : null}
+        {visionAnalysis.extractedText ? <View style={styles.aiVisionSection}><Text style={styles.aiFeatureLabel}>OCR</Text><Text selectable style={styles.aiVisionText}>{visionAnalysis.extractedText}</Text></View> : null}
+        {visionAnalysis.translation ? <View style={styles.aiVisionSection}><Text style={styles.aiFeatureLabel}>{isVietnamese ? 'Bản dịch' : 'Translation'}</Text><Text selectable style={styles.aiVisionText}>{visionAnalysis.translation}</Text></View> : null}
+        {visionAnalysis.priceHint ? <View style={styles.aiInsightCard}><CircleDollarSign color="#16a34a" size={19} /><Text selectable style={styles.aiResultText}>{visionAnalysis.priceHint}</Text></View> : null}
+        {visionAnalysis.safetyNote ? <View style={styles.aiSafetyAlert}><ShieldAlert color="#dc2626" size={19} /><Text selectable style={styles.aiResultText}>{visionAnalysis.safetyNote}</Text></View> : null}
+      </View>
+    );
+  };
+
+  const renderVisionCamera = (mode: VisionAnalysisMode) => (
+    <View style={styles.aiFeatureBody}>
+      {cameraActive && cameraPermission?.granted ? (
+        <View style={styles.aiLiveCameraWrap}>
+          <CameraView ref={cameraRef} active facing={cameraFacing} mirror={cameraFacing === 'front'} style={styles.aiLiveCamera} />
+          <View pointerEvents="none" style={styles.aiCameraGuide}><ScanLine color={colors.surface} size={58} /><Text style={styles.aiCameraHint}>{isVietnamese ? 'Giữ ảnh rõ nét và đủ sáng' : 'Keep the image sharp and well lit'}</Text></View>
+          <View style={styles.aiCameraControls}>
+            <Pressable accessibilityLabel={isVietnamese ? 'Đổi camera' : 'Flip camera'} accessibilityRole="button" style={styles.aiCameraControlButton} onPress={() => setCameraFacing((current) => current === 'back' ? 'front' : 'back')}><RefreshCw color={colors.surface} size={20} /></Pressable>
+            <Pressable accessibilityLabel={isVietnamese ? 'Chụp và phân tích' : 'Capture and analyze'} accessibilityRole="button" disabled={visionLoading} style={styles.aiCameraShutter} onPress={() => void captureAndAnalyze(mode)}><View style={styles.aiCameraShutterCore} /></Pressable>
+            <Pressable accessibilityLabel={isVietnamese ? 'Đóng camera' : 'Close camera'} accessibilityRole="button" style={styles.aiCameraControlButton} onPress={() => setCameraActive(false)}><X color={colors.surface} size={21} /></Pressable>
+          </View>
+        </View>
+      ) : capturedImageUri ? (
+        <Image source={{ uri: capturedImageUri }} style={styles.aiCapturedImage} resizeMode="cover" />
+      ) : (
+        <View style={styles.aiCameraPreview}><Camera color={colors.surface} size={48} /><Text style={styles.aiCameraHint}>{isVietnamese ? 'Ảnh chỉ được gửi khi bạn bấm chụp' : 'The image is sent only after you capture it'}</Text></View>
+      )}
+      {!cameraActive ? <PrimaryButton label={capturedImageUri ? (isVietnamese ? 'Chụp ảnh khác' : 'Retake photo') : (isVietnamese ? 'Mở camera' : 'Open camera')} icon={Camera} onPress={() => void startVisionCamera()} /> : null}
+      {renderVisionResult()}
+      <Text style={styles.aiPrivacyNote}>{isVietnamese ? 'Ảnh được gửi qua kết nối HTTPS tới Gemini để phân tích và không được lưu trong ứng dụng.' : 'The image is sent to Gemini over HTTPS for analysis and is not stored by the app.'}</Text>
+    </View>
+  );
+
+  const renderFeatureContent = () => {
+    if (selectedFeature === 'chat') {
+      return (
+        <View style={styles.aiFeatureBody}>
+          <Text style={styles.aiFeatureLead}>{isVietnamese ? 'Bạn muốn biết gì về Việt Nam?' : 'What would you like to know about Vietnam?'}</Text>
+          <View style={styles.aiPromptWrap}>
+            {[
+              isVietnamese ? '3 ngày ở TP.HCM nên đi đâu?' : 'What should I do in HCMC for 3 days?',
+              isVietnamese ? 'Món nào không cay?' : 'Which local dishes are not spicy?',
+              isVietnamese ? 'Cách đi sân bay tiết kiệm?' : 'What is the cheapest airport route?',
+            ].map((prompt) => <Pressable accessibilityRole="button" key={prompt} style={styles.aiPromptChip} onPress={() => runFeaturePrompt(prompt)}><Text style={styles.aiPromptText}>{prompt}</Text></Pressable>)}
+          </View>
+          <TextInput value={featureInput} onChangeText={setFeatureInput} placeholder={isVietnamese ? 'Nhập câu hỏi...' : 'Type your question...'} placeholderTextColor={colors.muted} style={styles.aiFeatureInput} returnKeyType="send" onSubmitEditing={() => runFeaturePrompt(featureInput)} />
+          <PrimaryButton label={isVietnamese ? 'Hỏi AI' : 'Ask AI'} icon={Send} onPress={() => runFeaturePrompt(featureInput)} />
+        </View>
+      );
+    }
+    if (selectedFeature === 'planner') {
+      return (
+        <View style={styles.aiFeatureBody}>
+          <View style={styles.aiInsightCard}><CalendarCheck color="#2563eb" size={22} /><View style={styles.flexOne}><Text style={styles.timelineTitle}>{city} · {tripDays} {isVietnamese ? 'ngày' : 'days'}</Text><Text style={styles.v2PlaceSub}>{tripStyle} · {isVietnamese ? 'ước tính 1,8–3,2 triệu ₫' : 'estimated 1.8M–3.2M ₫'}</Text></View></View>
+          <Text style={styles.aiFeatureLabel}>{isVietnamese ? 'Số ngày' : 'Trip length'}</Text>
+          <View style={styles.aiPromptWrap}>{[1, 2, 3, 5].map((day) => <Pressable key={day} style={[styles.aiPromptChip, tripDays === day && styles.aiPromptChipActive]} onPress={() => onChangeTripDays(day)}><Text style={[styles.aiPromptText, tripDays === day && styles.aiPromptTextActive]}>{day} {isVietnamese ? 'ngày' : 'days'}</Text></Pressable>)}</View>
+          <Text style={styles.aiFeatureLabel}>{isVietnamese ? 'Phong cách' : 'Travel style'}</Text>
+          <View style={styles.aiPromptWrap}>{tripStyles.map((style) => <Pressable key={style} style={[styles.aiPromptChip, tripStyle === style && styles.aiPromptChipActive]} onPress={() => onChangeTripStyle(style)}><Text style={[styles.aiPromptText, tripStyle === style && styles.aiPromptTextActive]}>{style}</Text></Pressable>)}</View>
+          <PrimaryButton label={isVietnamese ? 'Tạo lịch trình thông minh' : 'Build smart itinerary'} icon={Sparkles} onPress={() => { closeFeature(); onBuildItinerary(); }} />
+        </View>
+      );
+    }
+    if (selectedFeature === 'voice') {
+      return (
+        <View style={[styles.aiFeatureBody, styles.aiVoiceBody]}>
+          <View style={[styles.aiVoiceOrbLarge, voiceActive && styles.aiVoiceOrbListening]}><Mic color={colors.surface} size={38} /></View>
+          <Text style={styles.aiFeatureLead}>{voiceActive ? (isVietnamese ? 'Đang nghe… chạm để hoàn tất' : 'Listening… tap to finish') : (isVietnamese ? 'Chạm để bắt đầu hội thoại' : 'Tap to start a conversation')}</Text>
+          <Text style={styles.aiFeatureCaption}>{isVietnamese ? 'Có thể hỏi đường, món ăn, giá cả hoặc văn hóa.' : 'Ask about directions, food, prices or culture.'}</Text>
+          <Pressable accessibilityRole="button" style={[styles.aiVoiceStart, voiceActive && styles.aiVoiceStop]} onPress={() => {
+            if (!voiceActive) { setVoiceActive(true); setFeatureResult(null); return; }
+            setVoiceActive(false);
+            runFeaturePrompt(isVietnamese ? `Gợi ý một trải nghiệm thú vị gần tôi ở ${city}` : `Suggest an interesting experience near me in ${city}`, true);
+          }}><Text style={styles.aiVoiceStartText}>{voiceActive ? (isVietnamese ? 'Hoàn tất' : 'Finish') : (isVietnamese ? 'Bắt đầu nói' : 'Start speaking')}</Text></Pressable>
+        </View>
+      );
+    }
+    if (selectedFeature === 'camera') {
+      const labels = { food: isVietnamese ? 'Món ăn' : 'Food', landmark: isVietnamese ? 'Địa danh' : 'Landmark', sign: isVietnamese ? 'Biển báo' : 'Sign' };
+      return (
+        <View style={styles.aiFeatureBody}>
+          <View style={styles.aiPromptWrap}>{(Object.keys(labels) as (keyof typeof labels)[]).map((mode) => <Pressable key={mode} style={[styles.aiPromptChip, scanMode === mode && styles.aiPromptChipActive]} onPress={() => setScanMode(mode)}><Text style={[styles.aiPromptText, scanMode === mode && styles.aiPromptTextActive]}>{labels[mode]}</Text></Pressable>)}</View>
+          {renderVisionCamera(scanMode)}
+        </View>
+      );
+    }
+    if (selectedFeature === 'ocr') {
+      return (
+        <View style={styles.aiFeatureBody}>
+          <Text style={styles.aiFeatureLead}>{isVietnamese ? 'Quét và dịch nội dung tiếng Việt' : 'Scan and translate Vietnamese text'}</Text>
+          <Text style={styles.aiFeatureCaption}>{isVietnamese ? 'Chụp menu, biển hiệu hoặc hóa đơn. AI sẽ giữ nguyên giá và tổng tiền khi trích xuất.' : 'Capture a menu, sign or receipt. AI preserves printed prices and totals while extracting text.'}</Text>
+          {renderVisionCamera('ocr')}
+        </View>
+      );
+    }
+    if (selectedFeature === 'expense') {
+      return (
+        <View style={styles.aiFeatureBody}>
+          <View style={styles.aiExpenseSummary}><Text style={styles.tripEyebrow}>{isVietnamese ? 'TỔNG CHUYẾN ĐI' : 'TRIP TOTAL'}</Text><Text selectable style={styles.aiExpenseTotal}>{totalExpense.toLocaleString('vi-VN')} ₫</Text><Text style={styles.v2PlaceSub}>{isVietnamese ? 'AI: Chi phí lưu trú chiếm tỷ trọng cao nhất.' : 'AI: Accommodation is your largest category.'}</Text></View>
+          <View style={styles.aiPromptWrap}>{['Food', 'Transport', 'Stay', 'Other'].map((category) => <Pressable key={category} style={[styles.aiPromptChip, expenseCategory === category && styles.aiPromptChipActive]} onPress={() => setExpenseCategory(category)}><Text style={[styles.aiPromptText, expenseCategory === category && styles.aiPromptTextActive]}>{category}</Text></Pressable>)}</View>
+          <View style={styles.expenseInputRow}><TextInput value={expenseInput} onChangeText={setExpenseInput} keyboardType="numeric" placeholder={isVietnamese ? 'Số tiền (VND)' : 'Amount (VND)'} placeholderTextColor={colors.muted} style={styles.expenseInput} /><Pressable accessibilityLabel={isVietnamese ? 'Thêm chi phí' : 'Add expense'} accessibilityRole="button" style={styles.expenseAdd} onPress={() => { const amount = Number(expenseInput.replace(/\D/g, '')); if (amount > 0) { setAiExpenses((current) => [...current, { id: `${Date.now()}`, label: expenseCategory, amount }]); setExpenseInput(''); } }}><Plus color={colors.surface} size={20} /></Pressable></View>
+          {aiExpenses.slice(-3).map((item) => <View key={item.id} style={styles.aiExpenseRow}><Text style={[styles.timelineTitle, styles.flexOne]}>{item.label}</Text><Text selectable style={styles.expenseRowAmount}>{item.amount.toLocaleString('vi-VN')} ₫</Text></View>)}
+        </View>
+      );
+    }
+    if (selectedFeature === 'weather') {
+      return (
+        <View style={styles.aiFeatureBody}>
+          <View style={styles.aiWeatherHero}><CloudSun color="#ca8a04" size={34} /><View><Text style={styles.aiFeatureLead}>{city} · 29°C</Text><Text style={styles.v2PlaceSub}>{isVietnamese ? 'Mưa ngắn lúc 16:30 · độ tin cậy 78%' : 'Short rain at 16:30 · 78% confidence'}</Text></View></View>
+          {[['09:00', isVietnamese ? 'Tham quan ngoài trời · thời tiết tốt' : 'Outdoor sightseeing · good weather'], ['16:30', isVietnamese ? 'Đổi sang bảo tàng hoặc quán cà phê' : 'Switch to a museum or café'], ['18:15', isVietnamese ? 'Dời ngắm hoàng hôn sau cơn mưa' : 'Move sunset viewing until after rain']].map(([time, text]) => <View key={time} style={styles.aiAdviceRow}><Text style={styles.timelineTime}>{time}</Text><Text style={[styles.timelineTitle, styles.flexOne]}>{text}</Text></View>)}
+          <PrimaryButton label={isVietnamese ? 'Nhờ AI tối ưu lịch hôm nay' : 'Optimize today’s plan'} icon={Sparkles} onPress={() => runFeaturePrompt(isVietnamese ? `Điều chỉnh lịch trình hôm nay ở ${city} vì có mưa lúc 16:30` : `Adjust today's ${city} itinerary because rain is expected at 16:30`)} />
+        </View>
+      );
+    }
+    if (selectedFeature === 'safety') {
+      return (
+        <View style={styles.aiFeatureBody}>
+          <View style={styles.aiSafetyAlert}><ShieldAlert color="#dc2626" size={23} /><View style={styles.flexOne}><Text style={styles.timelineTitle}>{isVietnamese ? 'Mức cảnh báo: Bình thường' : 'Alert level: Normal'}</Text><Text style={styles.v2PlaceSub}>{isVietnamese ? 'Giữ đồ có giá trị cẩn thận ở khu chợ đông người.' : 'Keep valuables secure in crowded market areas.'}</Text></View></View>
+          <View style={styles.aiEmergencyGrid}>{[['113', isVietnamese ? 'Công an' : 'Police'], ['114', isVietnamese ? 'Cứu hỏa' : 'Fire'], ['115', isVietnamese ? 'Cấp cứu' : 'Ambulance']].map(([number, label]) => <View key={number} style={styles.aiEmergencyCard}><Text selectable style={styles.aiEmergencyNumber}>{number}</Text><Text style={styles.v2PlaceSub}>{label}</Text></View>)}</View>
+          <PrimaryButton label={isVietnamese ? 'Hướng dẫn an toàn theo vị trí' : 'Get location safety guidance'} icon={ShieldAlert} onPress={() => runFeaturePrompt(isVietnamese ? `Cho tôi hướng dẫn an toàn khi đi du lịch tại ${city}` : `Give me practical safety guidance for travelling in ${city}`)} />
+        </View>
+      );
+    }
+    return (
+      <View style={styles.aiFeatureBody}>
+        <Text style={styles.aiFeatureLead}>{isVietnamese ? `Khám phá ${city} như người bản địa` : `Experience ${city} like a local`}</Text>
+        {[
+          { title: isVietnamese ? 'Cà phê buổi sáng trong hẻm' : 'Morning alley coffee', detail: isVietnamese ? '07:00 · ít khách du lịch · 25k–45k ₫' : '07:00 · fewer tourists · 25k–45k ₫', icon: Coffee },
+          { title: isVietnamese ? 'Chợ địa phương giờ tan tầm' : 'Local market at rush hour', detail: isVietnamese ? '17:30 · đồ ăn đường phố · mang tiền lẻ' : '17:30 · street food · carry small notes', icon: ShoppingBag },
+          { title: isVietnamese ? 'Đi bộ khu phố cũ buổi tối' : 'Evening old-quarter walk', detail: isVietnamese ? '19:30 · nhịp sống địa phương · miễn phí' : '19:30 · local atmosphere · free', icon: Navigation },
+        ].map(({ title, detail, icon: Icon }) => <Pressable key={title} style={styles.aiLocalRow} onPress={() => runFeaturePrompt(isVietnamese ? `Hãy hướng dẫn chi tiết trải nghiệm: ${title} ở ${city}` : `Give me a detailed local guide for: ${title} in ${city}`)}><View style={styles.v2QuickIcon}><Icon color={colors.primary} size={19} /></View><View style={styles.flexOne}><Text style={styles.timelineTitle}>{title}</Text><Text style={styles.v2PlaceSub}>{detail}</Text></View><ChevronRight color={colors.muted} size={18} /></Pressable>)}
+      </View>
+    );
+  };
+
   return (
     <View style={styles.flexOne}>
       <View style={styles.aiHeader}>
@@ -4182,6 +5602,29 @@ function AiScreen({
         </View>
       </View>
       <ScrollView contentContainerStyle={styles.aiContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.aiWelcomeCard}>
+          <View style={styles.aiOrb}><Sparkles color={colors.surface} size={26} /></View>
+          <View style={styles.flexOne}>
+            <Text style={styles.aiWelcomeTitle}>{getWelcomeMessage(locale)}</Text>
+            <Text style={styles.aiItinerarySubtitle}>{languageNativeNames[currentLanguage]} · Vinago+ AI</Text>
+          </View>
+        </View>
+
+        <View style={styles.aiToolkitHeader}>
+          <View><Text style={styles.homeSectionTitle}>AI Toolkit</Text><Text style={styles.v2PlaceSub}>{isVietnamese ? '9 công cụ đồng hành trong suốt chuyến đi' : '9 smart tools for every part of your trip'}</Text></View>
+          <View style={styles.aiToolkitCount}><Text style={styles.aiToolkitCountText}>9</Text></View>
+        </View>
+        <View style={styles.aiFeatureGrid}>
+          {features.map(({ id, title, description, icon: Icon, color, tint }) => (
+            <Pressable accessibilityLabel={`${title}: ${description}`} accessibilityRole="button" key={id} style={styles.aiFeatureCard} onPress={() => openFeature(id)}>
+              <View style={[styles.aiFeatureIcon, { backgroundColor: tint }]}><Icon color={color} size={22} /></View>
+              <Text style={styles.aiFeatureCardTitle}>{title}</Text>
+              <Text style={styles.aiFeatureCardDescription}>{description}</Text>
+              <View style={styles.aiFeatureOpen}><Text style={styles.aiFeatureOpenText}>{isVietnamese ? 'Mở' : 'Open'}</Text><ChevronRight color={colors.primary} size={14} /></View>
+            </Pressable>
+          ))}
+        </View>
+
         <View style={styles.aiItineraryCard}>
           <Text style={styles.aiItineraryTitle}>{t('ai.itineraryBuilder')}</Text>
           <Text style={styles.aiItinerarySubtitle}>{t('ai.itinerarySubtitle')}</Text>
@@ -4242,8 +5685,15 @@ function AiScreen({
             ))}
           </View>
         ) : null}
+        {isReplying ? (
+          <View style={[styles.chatBubble, styles.chatBubbleAssistant, styles.aiReplyingBubble]}>
+            <ActivityIndicator color={colors.primary} size="small" />
+            <Text style={styles.chatTextAssistant}>{aiLanguageCopy[locale].listening}</Text>
+          </View>
+        ) : null}
       </ScrollView>
       <View style={styles.aiInputRow}>
+        <Pressable accessibilityLabel="Open AI Voice" accessibilityRole="button" style={styles.aiVoiceButton} onPress={() => openFeature('voice')}><Mic color={colors.primary} size={20} /></Pressable>
         <View style={styles.aiInputField}>
           <TextInput
             value={chatInput}
@@ -4252,16 +5702,34 @@ function AiScreen({
             placeholderTextColor={colors.muted}
             style={styles.aiInput}
             returnKeyType="send"
-            onSubmitEditing={() => onAsk(chatInput)}
+            onSubmitEditing={() => { void onAsk(chatInput); }}
           />
         </View>
         <Pressable
           style={styles.aiSendButton}
-          onPress={() => onAsk(chatInput)}
+          disabled={isReplying}
+          onPress={() => { void onAsk(chatInput); }}
         >
           <Send color={colors.surface} size={18} />
         </Pressable>
       </View>
+      <Modal animationType="slide" transparent visible={selectedFeature !== null} onRequestClose={closeFeature}>
+        <View style={styles.aiFeatureModalBackdrop}>
+          <Pressable accessibilityLabel={isVietnamese ? 'Đóng công cụ AI' : 'Close AI tool'} accessibilityRole="button" style={styles.aiFeatureModalDismiss} onPress={closeFeature} />
+          <View style={styles.aiFeatureSheet}>
+            <View style={styles.aiFeatureHandle} />
+            <View style={styles.aiFeatureSheetHeader}>
+              {selectedFeatureMeta ? <View style={[styles.aiFeatureIcon, { backgroundColor: selectedFeatureMeta.tint }]}><selectedFeatureMeta.icon color={selectedFeatureMeta.color} size={23} /></View> : null}
+              <View style={styles.flexOne}><Text style={styles.aiFeatureSheetTitle}>{selectedFeatureMeta?.title}</Text><Text style={styles.v2PlaceSub}>{selectedFeatureMeta?.description}</Text></View>
+              <Pressable accessibilityLabel={isVietnamese ? 'Đóng' : 'Close'} accessibilityRole="button" style={styles.aiFeatureClose} onPress={closeFeature}><X color={colors.text} size={20} /></Pressable>
+            </View>
+            <ScrollView contentContainerStyle={styles.aiFeatureSheetScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              {renderFeatureContent()}
+              {featureResult ? <View style={styles.aiResultCard}><Sparkles color={colors.primary} size={19} /><Text selectable style={styles.aiResultText}>{featureResult}</Text></View> : null}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -4441,6 +5909,7 @@ export default function App() {
 function TravelApp() {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const appLocation = useAppLocation();
   const isWide = width >= 900;
   const mobileBottomInset = isWide ? 0 : Math.max(insets.bottom, 0);
   const bottomNavHeight = 64 + mobileBottomInset;
@@ -4449,6 +5918,7 @@ function TravelApp() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [draftProfile, setDraftProfile] = useState<UserProfile>(defaultProfile);
   const [activeTab, setActiveTab] = useState<TabId>('home');
+  const [pendingLiveTeamCode, setPendingLiveTeamCode] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCity, setSelectedCity] = useState<City | 'All'>('All');
   const [placesCatalog, setPlacesCatalog] = useState<Place[]>(places);
@@ -4456,6 +5926,7 @@ function TravelApp() {
   const [selectedFoodId, setSelectedFoodId] = useState(foods[0].id);
   const [favorites, setFavorites] = useState<SavedItem[]>([]);
   const [authSession, setAuthSession] = useState<AuthSessionState | null>(null);
+  const [guestSession, setGuestSession] = useState<GuestSession | null>(() => getStoredGuestSession());
   const [activityHistory, setActivityHistory] = useState<ActivityHistoryEntry[]>([]);
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
   const [settings, setSettings] = useState<SettingsState>(defaultSettings);
@@ -4470,13 +5941,15 @@ function TravelApp() {
   const [lastItinerary, setLastItinerary] = useState<ItineraryConfirmation | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
+  const [isAiReplying, setIsAiReplying] = useState(false);
   const [tripDays, setTripDays] = useState(2);
-  const [tripStyle, setTripStyle] = useState<TripStyle>('Culture + Food');
+  const [tripStyle, setTripStyle] = useState<TripStyle>('Budget');
   const [emailStatus, setEmailStatus] = useState<string | null>(null);
   const [emailRecipient, setEmailRecipient] = useState('');
   const [emailSubject, setEmailSubject] = useState('');
   const [emailBody, setEmailBody] = useState('');
   const [pendingPlaceId, setPendingPlaceId] = useState<string | null>(null);
+  const [placeReturnTab, setPlaceReturnTab] = useState<TabId>('explore');
   const [pendingFoodId, setPendingFoodId] = useState<string | null>(null);
   const [showOfflineBanner, setShowOfflineBanner] = useState(false);
   const [isPlacesDatabaseReady, setIsPlacesDatabaseReady] = useState(false);
@@ -4490,18 +5963,128 @@ function TravelApp() {
   const [localHelperJobs, setLocalHelperJobs] = useState<LocalHelperJob[]>([]);
   const [selectedLocalHelperJob, setSelectedLocalHelperJob] = useState<LocalHelperJob | null>(null);
   const [localHelperEarnings, setLocalHelperEarnings] = useState<LocalHelperEarning[]>([]);
+  const [locationPromptVisible, setLocationPromptVisible] = useState(false);
+  const [locationPromptChecked, setLocationPromptChecked] = useState(false);
+  const [memberAlert, setMemberAlert] = useState<MemberNotification | null>(null);
+  const [pendingChatFriendId, setPendingChatFriendId] = useState<string | null>(null);
+  const [memberChatOpen, setMemberChatOpen] = useState(false);
+  const [selectedArticle, setSelectedArticle] = useState<WpArticle | null>(null);
+  const [wpConfigModalVisible, setWpConfigModalVisible] = useState(false);
   const didTrackAppOpenRef = useRef(false);
   const didTrackOnboardingRef = useRef(false);
   const previousScreenRef = useRef<TabId | null>(null);
   const guestUserIdRef = useRef(`guest_${Math.random().toString(36).slice(2, 10)}`);
   const scannedQrRef = useRef<string | null>(null);
+  const seenMemberCallRef = useRef<string | null>(null);
+  const seenMemberMessageRef = useRef<string | null>(null);
+  const seenLiveTeamInviteRef = useRef<string | null>(null);
+  const hasRemoteMemberPushRef = useRef(false);
 
   const currentProfile = profile ?? draftProfile;
   const locale = getLocale(currentProfile.language);
   const t = (key: TranslationKey): string => translate(locale, key);
-  const currentUserId = authSession?.user.id ?? guestUserIdRef.current;
-  const currentUserName = authSession?.user.name ?? 'Guest traveler';
+  const currentUserId = authSession?.user.id ?? guestSession?.user.id ?? guestUserIdRef.current;
+  const currentUserName = authSession?.user.name ?? guestSession?.user.name ?? 'Guest traveler';
   const currentUserEmail = authSession?.user.email ?? '';
+
+  useEffect(() => {
+    if (authSession) return;
+    let active = true;
+    void getOrCreateGuestSession().then((session) => { if (active) setGuestSession(session); }).catch(() => {});
+    return () => { active = false; };
+  }, [authSession]);
+
+  useEffect(() => {
+    const openLiveTeamLink = (url: string | null) => {
+      if (!url || !/live-team\//i.test(url)) return;
+      const code = normalizeLiveTeamCode(url);
+      if (code.length !== 10) return;
+      setPendingLiveTeamCode(code);
+      setActiveTab('live_team');
+    };
+    void Linking.getInitialURL().then(openLiveTeamLink);
+    const subscription = Linking.addEventListener('url', ({ url }) => openLiveTeamLink(url));
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if ((authSession || guestSession) && pendingLiveTeamCode) setActiveTab('live_team');
+  }, [authSession, guestSession, pendingLiveTeamCode]);
+
+  const openMemberNotification = useCallback((notification: MemberNotification) => {
+    if (notification.kind === 'live-team') {
+      setMemberAlert(null);
+      setActiveTab('live_team');
+      return;
+    }
+    setPendingChatFriendId(notification.kind === 'chat' ? notification.friendId ?? null : null);
+    setMemberAlert(null);
+    setActiveTab('member_video_call');
+  }, []);
+  const handleMemberChatVisibilityChange = useCallback((visible: boolean) => setMemberChatOpen(visible), []);
+
+  useEffect(() => {
+    if ((!authSession && !guestSession) || !settings.notificationsEnabled) return;
+    let active = true;
+    const startedAt = Date.now();
+    void initializeMemberNotifications().then(async (pushToken) => {
+      if (!pushToken) return;
+      await registerMemberPushToken(pushToken);
+      hasRemoteMemberPushRef.current = true;
+    }).catch(() => {});
+    const stopListening = listenForMemberNotificationPress(openMemberNotification);
+    const pollMemberAlerts = async () => {
+      try {
+        const overview = await getMemberSocialOverview();
+        if (!active) return;
+        const incomingCall = overview.incomingCall;
+        if (incomingCall && incomingCall.roomCode !== seenMemberCallRef.current) {
+          seenMemberCallRef.current = incomingCall.roomCode;
+          const callAlert: MemberNotification = {
+            kind: 'call',
+            title: incomingCall.mode === 'audio' ? 'Cuộc gọi thoại đến' : 'Cuộc gọi video đến',
+            body: `${incomingCall.caller.name} đang gọi cho bạn`,
+            friendId: incomingCall.caller.id,
+            roomCode: incomingCall.roomCode,
+          };
+          setMemberAlert(callAlert);
+          if (!hasRemoteMemberPushRef.current) void showMemberNotification(callAlert);
+        }
+        const latestMessage = overview.latestIncomingMessage;
+        if (latestMessage && latestMessage.id !== seenMemberMessageRef.current) {
+          seenMemberMessageRef.current = latestMessage.id;
+          if (latestMessage.createdAt >= startedAt - 2_000) {
+            const chatAlert: MemberNotification = {
+              kind: 'chat',
+              title: `Tin nhắn từ ${latestMessage.sender.name}`,
+              body: latestMessage.text,
+              friendId: latestMessage.sender.id,
+            };
+            setMemberAlert(chatAlert);
+            if (!hasRemoteMemberPushRef.current) void showMemberNotification(chatAlert);
+          }
+        }
+        const liveTeamInvite = overview.incomingLiveTeamInvite;
+        if (liveTeamInvite && liveTeamInvite.roomCode !== seenLiveTeamInviteRef.current) {
+          seenLiveTeamInviteRef.current = liveTeamInvite.roomCode;
+          const liveTeamAlert: MemberNotification = { kind: 'live-team', title: `Lời mời vào ${liveTeamInvite.teamName}`, body: `${liveTeamInvite.inviter.name} mời bạn tham gia Live Team`, friendId: liveTeamInvite.inviter.id, roomCode: liveTeamInvite.roomCode };
+          setMemberAlert(liveTeamAlert);
+          if (!hasRemoteMemberPushRef.current) void showMemberNotification(liveTeamAlert);
+        }
+      } catch {
+        // The next polling interval retries automatically.
+      }
+    };
+    void pollMemberAlerts();
+    const timer = setInterval(() => { void pollMemberAlerts(); }, 10_000);
+    return () => { active = false; clearInterval(timer); stopListening(); };
+  }, [authSession?.user.id, guestSession?.user.id, openMemberNotification, settings.notificationsEnabled]);
+
+  useEffect(() => {
+    if (!memberAlert) return;
+    const timer = setTimeout(() => setMemberAlert(null), memberAlert.kind === 'call' ? 12_000 : 6_000);
+    return () => clearTimeout(timer);
+  }, [memberAlert]);
 
   const recordActivity = (type: ActivityHistoryType, title: string, detail?: string) => {
     setActivityHistory((current) =>
@@ -4692,6 +6275,19 @@ function TravelApp() {
   }, [activityHistory, isBooting]);
   useEffect(() => { void AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }, [settings]);
 
+  useEffect(() => {
+    if (isBooting || !profile || locationPromptChecked || appLocation.permission === 'checking') return;
+    setLocationPromptChecked(true);
+    if (appLocation.permission === 'granted') return;
+    void AsyncStorage.getItem(LOCATION_PROMPT_DISMISSED_KEY).then((dismissed) => {
+      if (dismissed !== '1') setLocationPromptVisible(true);
+    });
+  }, [appLocation.permission, isBooting, locationPromptChecked, profile]);
+
+  useEffect(() => {
+    if (appLocation.permission === 'granted') setLocationPromptVisible(false);
+  }, [appLocation.permission]);
+
   useEffect(() => { initializeGoogleAnalytics(); }, []);
 
   useEffect(() => {
@@ -4840,9 +6436,17 @@ function TravelApp() {
     return [...preferredPlaces, ...remainingPlaces].slice(0, 8);
   }, [placesCatalog]);
   const nearbyPlaces = useMemo(() => {
+    if (appLocation.coordinates) {
+      return [...placesCatalog]
+        .sort((first, second) => (
+          getDistanceKm(appLocation.coordinates!, { lat: first.lat, lng: first.lng })
+          - getDistanceKm(appLocation.coordinates!, { lat: second.lat, lng: second.lng })
+        ))
+        .slice(0, 5);
+    }
     const selectedPlaces = placesCatalog.filter((place) => selectedProfileCitySet.has(place.city));
     return (selectedPlaces.length > 0 ? selectedPlaces : popularPlaces).slice(0, 4);
-  }, [placesCatalog, popularPlaces, selectedProfileCitySet]);
+  }, [appLocation.coordinates, placesCatalog, popularPlaces, selectedProfileCitySet]);
   const popularFoods = useMemo(
     () => popularFoodIds.map((id) => foods.find((f) => f.id === id)).filter(Boolean) as Food[],
     [],
@@ -5006,19 +6610,44 @@ function TravelApp() {
     void trackEvent('recent_search_cleared', { source_screen: activeTab }, currentProfile);
   };
 
-  const askAi = (question: string): string | null => {
+  const askAi = async (question: string): Promise<string | null> => {
     const trimmed = question.trim();
     if (!trimmed) return null;
-    const answer = buildAiAnswer(trimmed, currentProfile, tripDays, tripStyle, locale, placesCatalog);
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     setMessages((current) => [
       ...current,
-      { id: `${Date.now()}-user`, from: 'user', text: trimmed },
-      { id: `${Date.now()}-assistant`, from: 'assistant', text: answer },
+      { id: `${requestId}-user`, from: 'user', text: trimmed },
     ]);
     setChatInput('');
+    setIsAiReplying(true);
     recordActivity('ai', 'Asked AI', trimmed);
     void trackEvent('ai_question_submitted', { question_length: trimmed.length, response_locale: locale, source_screen: activeTab, trip_style: tripStyle }, currentProfile);
-    return answer;
+    try {
+      const result = await askTravelAi({
+        question: trimmed,
+        locale,
+        language: currentProfile.language,
+        city: appLocation.cityLabel || getSelectedCitiesLabel(currentProfile),
+        tripDays,
+        tripStyle,
+      });
+      setMessages((current) => [
+        ...current,
+        { id: `${requestId}-assistant`, from: 'assistant', text: result.answer },
+      ]);
+      return result.answer;
+    } catch {
+      const fallback = locale === 'vi' || locale === 'en'
+        ? buildAiAnswer(trimmed, currentProfile, tripDays, tripStyle, locale, placesCatalog)
+        : aiLanguageCopy[locale].unavailable;
+      setMessages((current) => [
+        ...current,
+        { id: `${requestId}-assistant`, from: 'assistant', text: fallback },
+      ]);
+      return fallback;
+    } finally {
+      setIsAiReplying(false);
+    }
   };
 
   const submitSearch = (query: string) => {
@@ -5026,18 +6655,52 @@ function TravelApp() {
     recordSearch(trimmed);
     recordActivity('search', 'Searched app content', trimmed || 'Empty query');
     void trackEvent('search_submitted', { query_length: trimmed.length, source_screen: activeTab, query_language: locale }, currentProfile);
-    if (trimmed.length > 0) askAi(trimmed);
+    if (trimmed.length > 0) {
+      void askAi(trimmed);
+      setActiveTab('ai');
+    }
   };
 
   const changeTab = (tab: TabId) => {
+    if (tab === 'nearby' && !appLocation.coordinates) setLocationPromptVisible(true);
     setActiveTab(tab);
     recordActivity('navigation', `Opened ${tab}`, `From ${activeTab}`);
     void trackEvent('tab_opened', { tab_id: tab, source_screen: activeTab }, currentProfile);
   };
 
+  const requestAppLocation = async () => {
+    const coordinates = await appLocation.requestLocation();
+    if (coordinates) {
+      setLocationPromptVisible(false);
+      void AsyncStorage.removeItem(LOCATION_PROMPT_DISMISSED_KEY);
+      recordActivity('settings', 'Enabled current location', appLocation.cityLabel || `${coordinates.lat.toFixed(3)}, ${coordinates.lng.toFixed(3)}`);
+    }
+    return coordinates;
+  };
+
+  const openLocationPrompt = () => {
+    if (appLocation.permission === 'granted') {
+      void appLocation.refreshLocation();
+      return;
+    }
+    setLocationPromptVisible(true);
+  };
+
+  const dismissLocationPrompt = () => {
+    setLocationPromptVisible(false);
+    void AsyncStorage.setItem(LOCATION_PROMPT_DISMISSED_KEY, '1');
+  };
+
   const openTabFromHome = (tab: TabId) => {
     if (tab === 'explore') {
       setSelectedCity('All');
+    }
+    if (tab === 'nearby' && !appLocation.coordinates) {
+      setLocationPromptVisible(true);
+    }
+    if (tab === 'map') {
+      setPendingPlaceId(null);
+      if (!appLocation.coordinates) setLocationPromptVisible(true);
     }
     changeTab(tab);
   };
@@ -5051,6 +6714,7 @@ function TravelApp() {
   const openPlace = (id: string, sourceScreen: TabId) => {
     setSelectedPlaceId(id);
     setPendingPlaceId(id);
+    setPlaceReturnTab(sourceScreen);
     setActiveTab('place_detail');
     const item = placesCatalog.find((p) => p.id === id);
     recordActivity('content', 'Opened place', item ? `${item.name} · ${item.city}` : id);
@@ -5378,17 +7042,17 @@ function TravelApp() {
   };
 
   const sendItineraryEmail = async () => {
-    if (!authSession) {
-      setEmailStatus(t('ai.emailRequired'));
-      return;
-    }
     const itinerary = lastItinerary ?? createItineraryConfirmation(`Create a ${tripDays} day ${tripStyle} itinerary for ${getSelectedCitiesLabel(currentProfile)}.`, currentProfile, tripDays, tripStyle, locale, placesCatalog);
     setLastItinerary(itinerary);
     setEmailStatus(null);
-    const recipient = emailRecipient.trim() || authSession.user.email;
+    const recipient = emailRecipient.trim() || authSession?.user.email || '';
+    if (!recipient) {
+      setEmailStatus(t('ai.emailRequired'));
+      return;
+    }
     const subject = emailSubject.trim() || `Vinago+ itinerary confirmation: ${itinerary.title}`;
     const messageBody =
-      emailBody.trim() || buildItineraryEmailBody(authSession.user.name, itinerary, currentProfile);
+      emailBody.trim() || buildItineraryEmailBody(currentUserName, itinerary, currentProfile);
     recordActivity('email', 'Requested itinerary email', recipient);
     void trackEvent('itinerary_email_requested', { itinerary_days: itinerary.days, itinerary_style: itinerary.style, email_domain: getEmailDomain(recipient), delivery_mode: itineraryEmailEndpoint ? 'endpoint' : 'mail_composer' }, currentProfile);
 
@@ -5402,7 +7066,7 @@ function TravelApp() {
           headers: { Authorization: `Bearer ${endpointGoogleIdToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             to: recipient,
-            name: authSession.user.name,
+            name: currentUserName,
             subject,
             body: messageBody,
             itinerary,
@@ -5458,6 +7122,9 @@ function TravelApp() {
         return (
           <HomeScreen
             profile={currentProfile}
+            locationLabel={appLocation.cityLabel}
+            locationPermission={appLocation.permission}
+            locationLoading={appLocation.isLocating}
             recentSearches={recentSearches}
             popularPlaces={popularPlaces}
             nearbyPlaces={nearbyPlaces}
@@ -5469,6 +7136,82 @@ function TravelApp() {
             onOpenFood={(id) => openFood(id)}
             onOpenFilter={() => setActiveTab('filter')}
             onOpenTab={openTabFromHome}
+            isFavorite={isFavorite}
+            onToggleFavorite={toggleFavorite}
+            onRequestLocation={openLocationPrompt}
+            t={t}
+            wpNewsUrl={settings.wpNewsUrl || DEFAULT_WP_URL}
+            onOpenArticle={(art) => setSelectedArticle(art)}
+            onOpenWpConfig={() => setWpConfigModalVisible(true)}
+          />
+        );
+      case 'trips':
+        return (
+          <TripsScreen
+            profile={currentProfile}
+            itinerary={lastItinerary}
+            onCreatePlan={() => setActiveTab('ai')}
+            onOpenMap={() => {
+              setPendingPlaceId(null);
+              if (!appLocation.coordinates) setLocationPromptVisible(true);
+              setActiveTab('map');
+            }}
+          />
+        );
+      case 'saved':
+        return (
+          <SavedHubScreen
+            records={favoriteRecords}
+            history={activityHistory}
+            recentSearches={recentSearches}
+            onOpenPlace={(id) => openPlace(id, 'favorites')}
+            onOpenFood={openFood}
+            onClearHistory={clearActivityHistory}
+            t={t}
+          />
+        );
+      case 'notifications':
+        return <NotificationsScreen />;
+      case 'member_video_call':
+        return (
+          <MemberVideoCallScreen
+            isSignedIn={Boolean(authSession || guestSession)}
+            memberId={currentUserId}
+            memberName={currentUserName}
+            coordinates={appLocation.coordinates}
+            locationPermission={appLocation.permission}
+            isLocating={appLocation.isLocating}
+            onRequestLocation={requestAppLocation}
+            onOpenAccount={() => setActiveTab('account')}
+            initialFriendId={pendingChatFriendId}
+            onInitialFriendHandled={() => setPendingChatFriendId(null)}
+            onChatVisibilityChange={handleMemberChatVisibilityChange}
+          />
+        );
+      case 'live_team':
+        return (
+          <LiveTeamScreen
+            isSignedIn={Boolean(authSession || guestSession)}
+            memberId={currentUserId}
+            memberName={currentUserName}
+            initialCode={pendingLiveTeamCode}
+            onInitialCodeHandled={() => setPendingLiveTeamCode(null)}
+            onOpenAccount={() => setActiveTab('account')}
+          />
+        );
+      case 'currency':
+        return <CurrencyScreen profile={currentProfile} locationLabel={appLocation.cityLabel} />;
+      case 'nearby':
+        return (
+          <NearbyScreen
+            places={placesCatalog}
+            coordinates={appLocation.coordinates}
+            locationLabel={appLocation.cityLabel}
+            permission={appLocation.permission}
+            isLocating={appLocation.isLocating}
+            error={appLocation.error}
+            onRequestLocation={openLocationPrompt}
+            onOpenPlace={(id) => openPlace(id, 'nearby')}
             t={t}
           />
         );
@@ -5492,10 +7235,10 @@ function TravelApp() {
             place={selectedPlace}
             isFavorite={isFavorite('place', selectedPlace.id)}
             onToggleFavorite={() => toggleFavorite('place', selectedPlace.id)}
-            onBack={() => setActiveTab('explore')}
+            onBack={() => setActiveTab(placeReturnTab)}
             onOpenMap={openMap}
             onAskAi={() => {
-              askAi(`Tell me more about ${selectedPlace.name}`);
+              void askAi(`Tell me more about ${selectedPlace.name}`);
               setActiveTab('ai');
             }}
             onOpenLivePreview={openLivePreviewRequest}
@@ -5573,7 +7316,7 @@ function TravelApp() {
             onToggleFavorite={() => toggleFavorite('food', selectedFood.id)}
             onBack={() => setActiveTab('food')}
             onAskAi={() => {
-              askAi(`Is ${selectedFood.name} spicy?`);
+              void askAi(`Is ${selectedFood.name} spicy?`);
               setActiveTab('ai');
             }}
             t={t}
@@ -5621,6 +7364,10 @@ function TravelApp() {
             tripStyle={tripStyle}
             onChangeTripDays={setTripDays}
             onChangeTripStyle={setTripStyle}
+            currentCity={appLocation.cityLabel || currentProfile.currentCity}
+            currentLanguage={currentProfile.language}
+            locale={locale}
+            isReplying={isAiReplying}
             t={t}
           />
         );
@@ -5676,7 +7423,15 @@ function TravelApp() {
           />
         ) : null;
       case 'map':
-        return <MapScreen place={selectedPlace} onBack={() => setActiveTab(pendingPlaceId ? 'place_detail' : 'home')} t={t} />;
+        return (
+          <MapScreen
+            place={pendingPlaceId ? selectedPlace : null}
+            userCoordinates={appLocation.coordinates}
+            locationLabel={appLocation.cityLabel}
+            onBack={() => setActiveTab(pendingPlaceId ? 'place_detail' : 'home')}
+            t={t}
+          />
+        );
       case 'favorites':
         return (
           <FavoritesScreen
@@ -5692,6 +7447,7 @@ function TravelApp() {
         return (
           <AccountScreen
             authSession={authSession}
+            guestSession={guestSession}
             settings={settings}
             currentLanguage={currentProfile.language}
             qrBusy={qrBusy}
@@ -5707,6 +7463,8 @@ function TravelApp() {
             onOpenPrivacyPolicy={() => {
               void Linking.openURL(privacyPolicyUrl);
             }}
+            onOpenMemberVideoCall={() => setActiveTab('member_video_call')}
+            onOpenLiveTeam={() => setActiveTab('live_team')}
             onOpenLocalHelperOnboarding={() => setActiveTab('local_helper_onboarding')}
             onOpenLocalHelperJobs={openLocalHelperJobs}
             onOpenLocalHelperEarnings={openLocalHelperEarnings}
@@ -5726,6 +7484,7 @@ function TravelApp() {
             errorMessage={livePreviewError}
             onSaveProfile={saveLocalHelperProfile}
             onSetOnline={setLocalHelperOnline}
+            requestCurrentLocation={requestAppLocation}
           />
         );
       case 'local_helper_jobs':
@@ -5777,6 +7536,7 @@ function TravelApp() {
             onUpdateSettings={updateSettings}
             onBack={() => setActiveTab('account')}
             t={t}
+            onOpenWpConfig={() => setWpConfigModalVisible(true)}
           />
         );
       case 'language':
@@ -5793,10 +7553,16 @@ function TravelApp() {
           <SearchScreen
             places={placesCatalog}
             recentSearches={recentSearches}
+            userCoordinates={appLocation.coordinates}
             onSubmitSearch={submitSearch}
             onClearRecent={clearRecentSearches}
             onOpenPlace={(id) => openPlace(id, 'search')}
             onOpenFood={(id) => openFood(id)}
+            onOpenMap={() => {
+              setPendingPlaceId(null);
+              if (!appLocation.coordinates) setLocationPromptVisible(true);
+              setActiveTab('map');
+            }}
             t={t}
           />
         );
@@ -5883,12 +7649,12 @@ function TravelApp() {
                 );
               })}
               <View style={styles.sidebarDivider} />
-              {featureShortcuts.map((tab) => {
+              {featureShortcuts.map((tab, index) => {
                 const Icon = tab.icon;
                 const active = activeTab === tab.id;
                 return (
                   <Pressable
-                    key={`side-feature-${tab.id}`}
+                    key={`side-feature-${tab.labelKey}-${index}`}
                     style={[styles.sidebarTab, active && styles.sidebarTabActive]}
                     onPress={() => changeTab(tab.id)}
                   >
@@ -5901,8 +7667,8 @@ function TravelApp() {
               })}
             </View>
           ) : null}
-          <View style={[styles.mainPane, mobileBottomInset > 0 && { paddingBottom: mobileBottomInset }]}>
-            <HeaderBar
+          <View style={[styles.mainPane, !isWide && { paddingBottom: activeTab === 'member_video_call' && memberChatOpen ? 0 : bottomNavHeight }]}>
+            {isWide || !['home', 'trips', 'saved', 'ai', 'account', 'member_video_call', 'live_team'].includes(activeTab) ? <HeaderBar
               title={t('app.name')}
               subtitle={activeTab === 'home' ? t('home.discoverTitle') : undefined}
               onBack={
@@ -5918,6 +7684,11 @@ function TravelApp() {
                   'itinerary_pdf',
                   'map',
                   'offline',
+                  'notifications',
+                  'currency',
+                  'nearby',
+                  'member_video_call',
+                  'live_team',
                   'live_preview_request',
                   'live_preview_waiting',
                   'live_call_room',
@@ -5935,6 +7706,11 @@ function TravelApp() {
                       else if (activeTab === 'itinerary_pdf') setActiveTab('itinerary_preview');
                       else if (activeTab === 'itinerary_preview') setActiveTab('ai');
                       else if (activeTab === 'map') setActiveTab(pendingPlaceId ? 'place_detail' : 'home');
+                      else if (activeTab === 'notifications') setActiveTab('home');
+                      else if (activeTab === 'currency') setActiveTab('home');
+                      else if (activeTab === 'nearby') setActiveTab('home');
+                      else if (activeTab === 'member_video_call') setActiveTab('home');
+                      else if (activeTab === 'live_team') setActiveTab('account');
                       else if (activeTab === 'live_preview_request') setActiveTab('place_detail');
                       else if (activeTab === 'live_preview_waiting') setActiveTab(livePreviewRole === 'helper' ? 'local_helper_jobs' : 'place_detail');
                       else if (activeTab === 'live_call_room') setActiveTab('live_preview_waiting');
@@ -5945,8 +7721,7 @@ function TravelApp() {
                     }
                   : undefined
               }
-
-            />
+            /> : null}
             {showOfflineBanner ? (
               <View style={styles.offlineBanner}>
                 <WifiOff color={colors.primary} size={16} />
@@ -5957,6 +7732,11 @@ function TravelApp() {
               </View>
             ) : null}
             {renderActiveScreen()}
+            {!isWide && activeTab !== 'ai' && ['home', 'trips', 'saved', 'account', 'explore', 'food', 'culture'].includes(activeTab) ? (
+              <Pressable accessibilityLabel="Open AI travel assistant" style={[styles.aiFloatingButton, { bottom: bottomNavHeight + 14 }]} onPress={() => changeTab('ai')}>
+                <Sparkles color={colors.surface} size={24} />
+              </Pressable>
+            ) : null}
             {emailStatus ? (
               <View style={[styles.emailStatusBar, { bottom: emailStatusBottom }]}>
                 <Text style={styles.emailStatusText}>{emailStatus}</Text>
@@ -5967,7 +7747,24 @@ function TravelApp() {
             ) : null}
           </View>
         </View>
-        {!isWide ? (
+        <CallTone active={memberAlert?.kind === 'call'} variant="incoming" />
+        {memberAlert ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => openMemberNotification(memberAlert)}
+            style={[styles.memberAlert, memberAlert.kind === 'call' && styles.memberCallAlert]}
+          >
+            <View style={[styles.memberAlertIcon, memberAlert.kind === 'call' && styles.memberCallAlertIcon]}>
+              {memberAlert.kind === 'call' ? <Phone color={colors.surface} size={21} /> : memberAlert.kind === 'live-team' ? <Radio color={colors.surface} size={21} /> : <MessageCircle color={colors.surface} size={21} />}
+            </View>
+            <View style={styles.memberAlertCopy}>
+              <Text style={styles.memberAlertTitle}>{memberAlert.title}</Text>
+              <Text numberOfLines={2} style={styles.memberAlertBody}>{memberAlert.body}</Text>
+            </View>
+            <Pressable accessibilityLabel="Đóng thông báo" style={styles.memberAlertClose} onPress={(event) => { event.stopPropagation(); setMemberAlert(null); }}><X color={colors.muted} size={17} /></Pressable>
+          </Pressable>
+        ) : null}
+        {!isWide && !(activeTab === 'member_video_call' && memberChatOpen) ? (
           <BottomNav
             activeTab={activeTab}
             bottomInset={mobileBottomInset}
@@ -5982,6 +7779,28 @@ function TravelApp() {
           onScanned={(data) => void handleQrScanned(data)}
           title={t('account.qrScanWeb')}
           visible={scannerVisible}
+        />
+        <LocationPermissionModal
+          visible={locationPromptVisible}
+          permission={appLocation.permission}
+          canAskAgain={appLocation.canAskAgain}
+          isLocating={appLocation.isLocating}
+          cityLabel={appLocation.cityLabel}
+          error={appLocation.error}
+          isVietnamese={locale === 'vi'}
+          onAllow={() => { void requestAppLocation(); }}
+          onNotNow={dismissLocationPrompt}
+          onOpenSettings={() => { void Linking.openSettings(); }}
+        />
+        <NewsDetailModal
+          article={selectedArticle}
+          onClose={() => setSelectedArticle(null)}
+        />
+        <WpUrlConfigModal
+          visible={wpConfigModalVisible}
+          currentUrl={settings.wpNewsUrl || DEFAULT_WP_URL}
+          onSave={(url) => updateSettings({ wpNewsUrl: url })}
+          onClose={() => setWpConfigModalVisible(false)}
         />
       </SafeAreaView>
     </AppLanguageProvider>
@@ -6016,10 +7835,12 @@ function BottomNav({
         return (
           <Pressable
             key={tab.id}
-            style={styles.bottomNavItem}
+            style={[styles.bottomNavItem, tab.id === 'ai' && styles.bottomNavAiItem]}
             onPress={() => onChange(tab.id)}
           >
-            <Icon color={active ? colors.primary : colors.muted} size={20} />
+            <View style={tab.id === 'ai' ? [styles.bottomNavAiIcon, active && styles.bottomNavAiIconActive] : undefined}>
+              <Icon color={tab.id === 'ai' ? colors.surface : active ? colors.primary : colors.muted} size={tab.id === 'ai' ? 23 : 20} />
+            </View>
             <Text style={[styles.bottomNavText, active && styles.bottomNavTextActive]}>
               {t(tab.labelKey)}
             </Text>
@@ -6164,6 +7985,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.6, shadowRadius: 12, elevation: 6,
   },
   bottomNavItem: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4 },
+  bottomNavAiItem: { transform: [{ translateY: -8 }] },
+  bottomNavAiIcon: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#29110f', borderWidth: 3, borderColor: colors.surface },
+  bottomNavAiIconActive: { backgroundColor: colors.primary },
   bottomNavText: { color: colors.muted, fontSize: 10, fontWeight: '800' },
   bottomNavTextActive: { color: colors.primary },
 
@@ -6185,6 +8009,14 @@ const styles = StyleSheet.create({
   sidebarTabTextActive: { color: colors.primary, fontWeight: '900' },
   sidebarDivider: { height: 1, backgroundColor: colors.border, marginVertical: 8 },
   mainPane: { flex: 1 },
+  memberAlert: { position: 'absolute', top: 10, left: 12, right: 12, zIndex: 100, minHeight: 72, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 18, borderCurve: 'continuous', backgroundColor: colors.surface, borderWidth: 1, borderColor: '#fecaca', boxShadow: '0 10px 30px rgba(58,20,20,0.22)' },
+  memberCallAlert: { borderColor: '#bbf7d0' },
+  memberAlertIcon: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary },
+  memberCallAlertIcon: { backgroundColor: colors.success },
+  memberAlertCopy: { flex: 1, gap: 3 },
+  memberAlertTitle: { color: colors.text, fontSize: 14, fontWeight: '900' },
+  memberAlertBody: { color: colors.muted, fontSize: 12, lineHeight: 17, fontWeight: '700' },
+  memberAlertClose: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: colors.surfaceAlt },
 
   /* Home */
   homeContent: { padding: 16, gap: 18, paddingBottom: 96 },
@@ -6335,6 +8167,36 @@ const styles = StyleSheet.create({
   exploreListSub: { color: colors.muted, fontSize: 13, fontWeight: '700' },
   exploreListRating: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   exploreListRatingText: { color: colors.muted, fontSize: 12, fontWeight: '700' },
+
+  /* Nearby GPS */
+  nearbyEmptyContent: { flexGrow: 1, padding: 24, alignItems: 'center', justifyContent: 'center', gap: 14, backgroundColor: colors.background },
+  nearbyEmptyIcon: { width: 76, height: 76, borderRadius: 26, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primarySoft },
+  nearbyEmptyTitle: { color: colors.text, fontSize: 20, lineHeight: 26, fontWeight: '900', textAlign: 'center' },
+  nearbyEmptyBody: { maxWidth: 420, color: colors.muted, fontSize: 13, lineHeight: 20, fontWeight: '600', textAlign: 'center' },
+  nearbyLocationButton: { width: '100%', maxWidth: 420, minHeight: 50, paddingHorizontal: 16, borderRadius: 16, borderCurve: 'continuous', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.primary },
+  nearbyLocationButtonText: { color: colors.surface, fontSize: 14, fontWeight: '900' },
+  nearbyHeader: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 12, gap: 12, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
+  nearbyLocationRow: { minHeight: 64, padding: 12, borderRadius: 17, borderCurve: 'continuous', flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.primarySoft },
+  nearbyGpsDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: colors.success, borderWidth: 3, borderColor: '#bbf7d0' },
+  nearbyEyebrow: { color: colors.primary, fontSize: 9, lineHeight: 13, fontWeight: '900', letterSpacing: 0.8 },
+  nearbyLocationName: { color: colors.text, fontSize: 15, lineHeight: 21, fontWeight: '900' },
+  nearbyRefreshButton: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface },
+  nearbyRadiusRow: { gap: 8, paddingRight: 12 },
+  nearbyRadiusChip: { minWidth: 68, height: 36, paddingHorizontal: 12, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border },
+  nearbyRadiusChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  nearbyRadiusText: { color: colors.muted, fontSize: 11, fontWeight: '900' },
+  nearbyRadiusTextActive: { color: colors.surface },
+  nearbyResultCount: { color: colors.muted, fontSize: 11, fontWeight: '700' },
+  nearbyList: { padding: 14, gap: 10, paddingBottom: 110 },
+  nearbyPlaceCard: { minHeight: 96, padding: 10, borderRadius: 17, borderCurve: 'continuous', flexDirection: 'row', alignItems: 'center', gap: 11, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, boxShadow: '0 4px 14px rgba(61,22,22,0.05)' },
+  nearbyPlaceImage: { width: 88, height: 78, borderRadius: 13 },
+  nearbyPlaceBody: { flex: 1, gap: 5 },
+  nearbyPlaceName: { color: colors.text, fontSize: 15, lineHeight: 20, fontWeight: '900' },
+  nearbyPlaceMeta: { color: colors.muted, fontSize: 11, lineHeight: 16, fontWeight: '700' },
+  nearbyDistanceRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  nearbyDistanceText: { color: colors.primary, fontSize: 12, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  nearbyDistanceHint: { flexShrink: 1, color: colors.muted, fontSize: 10, fontWeight: '600' },
+  nearbyNoResults: { minHeight: 300, padding: 24, alignItems: 'center', justifyContent: 'center', gap: 9 },
 
   /* Place detail */
   placeDetailContent: { paddingBottom: 96 },
@@ -6613,24 +8475,55 @@ const styles = StyleSheet.create({
   languageFooter: { padding: 16, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.surface },
 
   /* Search */
-  searchTopRow: { padding: 12 },
+  searchScreen: { flex: 1, backgroundColor: '#f5f7f9' },
+  searchHero: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10, gap: 12, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: '#e8eaed' },
   searchInput: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    height: 48, paddingHorizontal: 14, borderRadius: 8,
-    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+    minHeight: 54, paddingHorizontal: 16, borderRadius: 18, borderCurve: 'continuous',
+    backgroundColor: colors.surface, boxShadow: '0 3px 14px rgba(15, 23, 42, 0.14)',
   },
-  searchInputField: { flex: 1, color: colors.text, fontSize: 15 },
-  searchContent: { padding: 16, gap: 18, paddingBottom: 96 },
+  searchInputField: { flex: 1, color: colors.text, fontSize: 16, fontWeight: '700' },
+  searchCategoryRow: { gap: 8, paddingRight: 12 },
+  searchCategoryChip: { minHeight: 38, paddingHorizontal: 13, borderRadius: 19, flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: colors.surface, borderWidth: 1, borderColor: '#dadce0' },
+  searchCategoryChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  searchCategoryText: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  searchCategoryTextActive: { color: colors.surface },
+  searchContent: { padding: 16, gap: 20, paddingBottom: 112, width: '100%', maxWidth: 980, alignSelf: 'center' },
+  searchMapBanner: { minHeight: 84, padding: 14, borderRadius: 20, borderCurve: 'continuous', flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#eef5ff', borderWidth: 1, borderColor: '#d7e7ff' },
+  searchMapBannerWide: { paddingHorizontal: 18 },
+  searchMapIcon: { width: 48, height: 48, borderRadius: 16, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface },
+  searchMapTitle: { color: colors.text, fontSize: 16, fontWeight: '900' },
+  searchMapBody: { color: colors.muted, fontSize: 12, fontWeight: '700', paddingTop: 2 },
+  searchMapButton: { minHeight: 42, paddingHorizontal: 13, borderRadius: 21, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.primary },
+  searchMapButtonText: { color: colors.surface, fontSize: 13, fontWeight: '900' },
   searchSectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  searchSectionTitle: { color: colors.text, fontSize: 16, fontWeight: '900' },
+  searchResultsHeader: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 },
+  searchSectionTitle: { color: colors.text, fontSize: 19, fontWeight: '900' },
   searchSectionLink: { color: colors.primary, fontWeight: '800' },
-  searchSection: { gap: 10 },
+  searchSection: { gap: 12 },
+  searchResultCount: { color: colors.muted, fontSize: 12, fontWeight: '700', paddingTop: 3 },
+  searchSortPill: { minHeight: 32, paddingHorizontal: 10, borderRadius: 16, flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  searchSortText: { color: colors.primary, fontSize: 11, fontWeight: '900' },
+  searchResultList: { gap: 10 },
   searchResultRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    padding: 10, borderRadius: 10, backgroundColor: colors.surface,
-    borderWidth: 1, borderColor: colors.border,
+    minHeight: 112, padding: 10, borderRadius: 18, borderCurve: 'continuous', backgroundColor: colors.surface,
+    borderWidth: 1, borderColor: '#e5e7eb', boxShadow: '0 2px 8px rgba(15, 23, 42, 0.05)',
   },
-  searchResultImage: { width: 56, height: 56, borderRadius: 8 },
+  searchResultRowWide: { padding: 12 },
+  searchResultImage: { width: 92, height: 92, borderRadius: 14, borderCurve: 'continuous' },
+  searchResultCopy: { flex: 1, minWidth: 0, gap: 3 },
+  searchResultName: { color: colors.text, fontSize: 16, fontWeight: '900' },
+  searchRatingRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  searchRatingText: { color: '#9a6700', fontSize: 12, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  searchReviewText: { color: colors.muted, fontSize: 12, fontWeight: '700' },
+  searchResultMeta: { color: colors.muted, fontSize: 12, fontWeight: '700' },
+  searchOpenText: { color: colors.success, fontSize: 12, fontWeight: '900' },
+  searchResultAction: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primarySoft },
+  searchSubsectionTitle: { color: colors.text, fontSize: 16, fontWeight: '900', paddingTop: 8 },
+  searchExampleList: { gap: 8 },
+  searchExample: { minHeight: 44, paddingHorizontal: 12, borderRadius: 13, flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: colors.primarySoft },
+  searchExampleText: { flex: 1, color: colors.text, fontSize: 13, fontWeight: '800' },
 
   /* Filter */
   filterHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border },
@@ -6673,6 +8566,24 @@ const styles = StyleSheet.create({
   primaryButtonGhost: { backgroundColor: 'transparent' },
   primaryButtonText: { color: colors.surface, fontWeight: '900', fontSize: 15 },
   primaryButtonTextAlt: { color: colors.primary },
+
+  /* Foreground location consent */
+  locationPermissionBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(25,10,10,0.52)' },
+  locationPermissionDismiss: { flex: 1 },
+  locationPermissionCard: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 28, gap: 13, borderTopLeftRadius: 28, borderTopRightRadius: 28, borderCurve: 'continuous', backgroundColor: colors.surface, boxShadow: '0 -10px 30px rgba(61,22,22,0.14)' },
+  locationPermissionIcon: { width: 54, height: 54, borderRadius: 19, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary },
+  locationPermissionTitle: { color: colors.text, fontSize: 22, lineHeight: 28, fontWeight: '900' },
+  locationPermissionBody: { color: colors.muted, fontSize: 13, lineHeight: 20, fontWeight: '600' },
+  locationPermissionUses: { gap: 9, paddingVertical: 3 },
+  locationPermissionUseRow: { minHeight: 28, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  locationPermissionUseText: { flex: 1, color: colors.text, fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  locationPermissionPrivacy: { padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 9, borderRadius: 15, borderCurve: 'continuous', backgroundColor: colors.primarySoft },
+  locationPermissionPrivacyText: { flex: 1, color: colors.text, fontSize: 11, lineHeight: 17, fontWeight: '700' },
+  locationPermissionError: { color: '#b91c1c', fontSize: 11, lineHeight: 16, fontWeight: '700' },
+  locationPermissionPrimary: { minHeight: 50, paddingHorizontal: 16, borderRadius: 16, borderCurve: 'continuous', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.primary },
+  locationPermissionPrimaryText: { color: colors.surface, fontSize: 14, fontWeight: '900' },
+  locationPermissionSecondary: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  locationPermissionSecondaryText: { color: colors.muted, fontSize: 13, fontWeight: '800' },
 
   /* Offline */
   offlineContent: { padding: 24, gap: 18, paddingBottom: 96 },
@@ -6845,6 +8756,231 @@ const styles = StyleSheet.create({
   },
   emailStatusText: { flex: 1, color: colors.text, fontSize: 12, fontWeight: '700' },
 
+  /* Vinago+ v2 */
+  v2HomeContent: { paddingBottom: 118, gap: 24, backgroundColor: '#fbfbfb' },
+  v2Hero: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 20, gap: 14, backgroundColor: colors.surface },
+  v2Greeting: { color: colors.muted, fontSize: 14, fontWeight: '800' },
+  v2HeroTitle: { color: colors.text, fontSize: 27, lineHeight: 34, fontWeight: '900', maxWidth: 310 },
+  v2Bell: { backgroundColor: colors.primarySoft },
+  v2SearchWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  v2SearchMain: { flex: 1, height: 50, flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 14, borderRadius: 16, backgroundColor: '#f5f5f5', borderWidth: 1, borderColor: colors.border },
+  v2SearchAction: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primarySoft },
+  homeLocationPill: { alignSelf: 'flex-start', maxWidth: '100%', minHeight: 38, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 13, borderCurve: 'continuous', flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: colors.primarySoft },
+  homeLocationText: { flexShrink: 1, color: colors.primary, fontSize: 12, lineHeight: 17, fontWeight: '900' },
+  v2AskAi: { height: 44, paddingHorizontal: 15, borderRadius: 14, backgroundColor: colors.primary, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  v2AskAiText: { flex: 1, color: colors.surface, fontSize: 14, fontWeight: '900' },
+  v2Section: { gap: 13, paddingHorizontal: 16 },
+  v2QuickActions: { flexDirection: 'row', justifyContent: 'space-between', gap: 7 },
+  v2QuickItem: { flex: 1, alignItems: 'center', gap: 7 },
+  v2QuickIcon: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primarySoft },
+  v2QuickLabel: { color: colors.text, fontSize: 10, lineHeight: 14, fontWeight: '800', textAlign: 'center' },
+  v2MoreTools: { gap: 8, paddingTop: 2, paddingRight: 12 },
+  v2MoreToolChip: { height: 36, paddingHorizontal: 11, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  v2MoreToolText: { color: colors.text, fontSize: 11, fontWeight: '800' },
+  v2CategoryRow: { gap: 10, paddingRight: 12 },
+  v2Category: { width: 82, alignItems: 'center', gap: 7, padding: 10, borderRadius: 16, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  v2CategoryIcon: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff6f5' },
+  v2CategoryText: { color: colors.text, fontSize: 11, fontWeight: '800', textAlign: 'center' },
+  v2CardRail: { gap: 12, paddingRight: 16 },
+  v2PlaceCard: { width: 226, overflow: 'hidden', borderRadius: 18, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  v2PlaceImage: { width: '100%', height: 142 },
+  v2SaveButton: { position: 'absolute', top: 10, right: 10, width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(20,20,20,0.55)' },
+  v2PlaceBody: { padding: 12, gap: 6 },
+  v2PlaceName: { color: colors.text, fontSize: 15, fontWeight: '900' },
+  v2MetaRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  v2MetaText: { color: colors.text, fontSize: 12, fontWeight: '800' },
+  v2OpenText: { color: colors.success, fontSize: 11, fontWeight: '900', marginLeft: 5 },
+  v2PlaceSub: { color: colors.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' },
+  v2FoodRail: { gap: 12, paddingRight: 16 },
+  v2FoodCard: { width: 150, gap: 5 },
+  v2FoodImage: { width: 150, height: 108, borderRadius: 16 },
+  v2EventBanner: { marginHorizontal: 16, padding: 14, borderRadius: 18, flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.primarySoft },
+  v2EventIcon: { width: 48, height: 48, borderRadius: 15, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
+  v2EventTitle: { color: colors.text, fontSize: 15, fontWeight: '900' },
+  v2RecentHint: { marginHorizontal: 16, color: colors.muted, fontSize: 12, fontWeight: '600' },
+  aiFloatingButton: { position: 'absolute', right: 18, width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary, borderWidth: 4, borderColor: colors.surface, boxShadow: '0 8px 20px rgba(218,37,29,0.28)' },
+
+  /* Trips */
+  tripContent: { padding: 16, gap: 16, paddingBottom: 116, backgroundColor: '#fbfbfb' },
+  tripHero: { padding: 18, gap: 12, borderRadius: 22, backgroundColor: '#29110f' },
+  tripHeroTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  tripEyebrow: { color: '#d8a5a1', fontSize: 11, fontWeight: '900', letterSpacing: 1.1 },
+  tripTitle: { color: colors.surface, fontSize: 28, lineHeight: 34, fontWeight: '900' },
+  tripDates: { color: '#f1d9d7', fontSize: 13, fontWeight: '700' },
+  weatherPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.12)' },
+  weatherTemp: { color: colors.surface, fontSize: 17, fontWeight: '900' },
+  tripProgressTrack: { height: 6, overflow: 'hidden', borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.18)' },
+  tripProgressFill: { height: '100%', borderRadius: 3, backgroundColor: colors.accent },
+  tripProgressText: { color: '#f1d9d7', fontSize: 11, fontWeight: '700' },
+  tripTabRow: { gap: 8, paddingRight: 16 },
+  tripTab: { height: 40, paddingHorizontal: 12, borderRadius: 13, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  tripTabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  tripTabText: { color: colors.muted, fontSize: 12, fontWeight: '800' },
+  tripTabTextActive: { color: colors.surface },
+  tripSection: { gap: 12 },
+  timelineRow: { minHeight: 70, flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 16, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  timelineTimeWrap: { width: 43, alignItems: 'center', gap: 6 },
+  timelineTime: { color: colors.text, fontSize: 12, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  timelineLine: { width: 2, height: 32, backgroundColor: colors.border },
+  timelineIcon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primarySoft },
+  timelineIconDone: { backgroundColor: colors.success },
+  timelineTitle: { color: colors.text, fontSize: 14, lineHeight: 20, fontWeight: '900' },
+  timelineTitleDone: { color: colors.muted, textDecorationLine: 'line-through' },
+  checkCircle: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: colors.border },
+  tripPanelTitle: { color: colors.text, fontSize: 15, fontWeight: '900' },
+  tripListRow: { minHeight: 66, padding: 12, borderRadius: 16, flexDirection: 'row', alignItems: 'center', gap: 11, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  expenseTotal: { alignItems: 'center', gap: 5, padding: 20, borderRadius: 20, backgroundColor: '#29110f' },
+  expenseAmount: { color: colors.surface, fontSize: 28, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  expenseRowAmount: { color: colors.text, fontSize: 13, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  expenseInputRow: { flexDirection: 'row', gap: 8 },
+  expenseInput: { flex: 1, height: 48, paddingHorizontal: 14, borderRadius: 14, color: colors.text, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  expenseAdd: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: colors.primary },
+  tripNoteInput: { minHeight: 170, padding: 14, borderRadius: 16, color: colors.text, textAlignVertical: 'top', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  savedHubHeader: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 10, gap: 3 },
+  savedHubTabs: { flexDirection: 'row', gap: 7, paddingHorizontal: 16, paddingBottom: 8 },
+  savedHubTab: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8, borderRadius: 12, backgroundColor: colors.surfaceAlt },
+  savedHubTabActive: { backgroundColor: colors.primary },
+  savedHubTabText: { color: colors.muted, fontSize: 11, fontWeight: '900', textAlign: 'center' },
+  savedHubTabTextActive: { color: colors.surface },
+  notificationsContent: { padding: 16, gap: 10, paddingBottom: 110 },
+  notificationCard: { padding: 14, borderRadius: 17, flexDirection: 'row', alignItems: 'flex-start', gap: 12, borderWidth: 1, borderColor: colors.border },
+
+  /* Currency & local prices */
+  currencyContent: { paddingBottom: 112, gap: 20, backgroundColor: '#fbfbfb' },
+  currencyHero: { padding: 20, gap: 7, backgroundColor: '#29110f' },
+  currencyEyebrow: { color: '#e8b7b2', fontSize: 11, fontWeight: '900', letterSpacing: 1.1 },
+  currencyTitle: { color: colors.surface, fontSize: 27, fontWeight: '900' },
+  currencySubtitle: { color: '#f1d9d7', fontSize: 13, lineHeight: 20, fontWeight: '600' },
+  currencySection: { paddingHorizontal: 16, gap: 10 },
+  currencyUpdated: { color: colors.muted, fontSize: 11, fontWeight: '700' },
+  currencySectionHint: { color: colors.muted, fontSize: 12, lineHeight: 18, fontWeight: '600' },
+  converterCard: { padding: 15, gap: 9, borderRadius: 19, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  converterInputRow: { gap: 10 },
+  converterInput: { height: 52, paddingHorizontal: 14, borderRadius: 14, color: colors.text, fontSize: 22, fontWeight: '900', fontVariant: ['tabular-nums'], backgroundColor: '#f6f6f6', borderWidth: 1, borderColor: colors.border },
+  currencyCodeRow: { gap: 7, paddingRight: 8 },
+  currencyCode: { minWidth: 52, height: 34, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: colors.surfaceAlt },
+  currencyCodeActive: { backgroundColor: colors.primary },
+  currencyCodeText: { color: colors.muted, fontSize: 11, fontWeight: '900' },
+  currencyCodeTextActive: { color: colors.surface },
+  converterEquals: { color: colors.muted, fontSize: 14, fontWeight: '900' },
+  converterResult: { color: colors.primary, fontSize: 28, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  converterRate: { color: colors.muted, fontSize: 11, lineHeight: 16, fontWeight: '600' },
+  banknoteRail: { gap: 12, paddingRight: 16 },
+  banknoteCard: { width: 330, gap: 8 },
+  banknoteImageFrame: { width: 330, height: 310, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: '#111111', borderWidth: 1, borderColor: colors.border },
+  banknoteImage: { width: '100%', height: '100%' },
+  banknoteZoomHint: { position: 'absolute', right: 10, bottom: 10, paddingHorizontal: 9, paddingVertical: 6, borderRadius: 10, flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(0,0,0,0.72)' },
+  banknoteZoomText: { color: colors.surface, fontSize: 10, fontWeight: '900' },
+  banknoteModalBackdrop: { flex: 1, paddingHorizontal: 12, paddingVertical: 56, alignItems: 'center', justifyContent: 'center', gap: 14, backgroundColor: 'rgba(0,0,0,0.96)' },
+  banknoteModalClose: { position: 'absolute', top: 48, right: 18, width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.16)' },
+  banknoteModalImage: { width: '100%', height: '72%' },
+  banknoteModalTitle: { color: colors.surface, fontSize: 22, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  banknoteModalHint: { color: '#cfcfcf', fontSize: 12, fontWeight: '700' },
+  banknote: { width: 238, height: 116, overflow: 'hidden', padding: 10, borderRadius: 12, borderWidth: 2, flexDirection: 'row', alignItems: 'center' },
+  banknoteSeal: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 2, backgroundColor: 'rgba(255,255,255,0.28)' },
+  banknoteSealText: { fontSize: 13, fontWeight: '900' },
+  banknoteCenter: { flex: 1, alignItems: 'center', gap: 3 },
+  banknoteCountry: { fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  banknoteValue: { fontSize: 24, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  banknoteLabel: { fontSize: 9, fontWeight: '800' },
+  banknoteCorner: { fontSize: 22, fontWeight: '900' },
+  banknotePattern: { position: 'absolute', right: -22, bottom: -35, width: 92, height: 92, borderRadius: 46, borderWidth: 8, opacity: 0.18 },
+  banknoteCardValue: { color: colors.text, fontSize: 13, fontWeight: '900' },
+  moneyTipCard: { marginHorizontal: 16, padding: 14, borderRadius: 17, flexDirection: 'row', alignItems: 'flex-start', gap: 11, backgroundColor: colors.primarySoft },
+  priceCityHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  cityPricePill: { maxWidth: 145, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.primarySoft },
+  cityPriceText: { flexShrink: 1, color: colors.primary, fontSize: 10, fontWeight: '900' },
+  priceTabRow: { gap: 7, paddingRight: 12 },
+  priceTab: { height: 36, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  priceTabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  priceTabText: { color: colors.muted, fontSize: 11, fontWeight: '900' },
+  priceTabTextActive: { color: colors.surface },
+  priceList: { gap: 8 },
+  priceRowCard: { minHeight: 78, padding: 12, borderRadius: 16, flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  priceTitle: { color: colors.text, fontSize: 13, lineHeight: 18, fontWeight: '900' },
+  priceDetail: { color: colors.muted, fontSize: 10, lineHeight: 15, fontWeight: '600' },
+  priceSource: { color: colors.primary, fontSize: 9, lineHeight: 14, fontWeight: '700' },
+  priceValue: { maxWidth: 90, color: colors.text, fontSize: 12, fontWeight: '900', textAlign: 'right', fontVariant: ['tabular-nums'] },
+  currencySafetyCard: { marginHorizontal: 16, padding: 14, borderRadius: 17, flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa' },
+
+  /* AI v2 */
+  aiWelcomeCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 15, borderRadius: 18, backgroundColor: colors.primarySoft },
+  aiOrb: { width: 50, height: 50, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary },
+  aiWelcomeTitle: { color: colors.text, fontSize: 18, fontWeight: '900' },
+  aiToolRail: { gap: 9, paddingRight: 12 },
+  aiToolCard: { width: 112, minHeight: 96, padding: 12, gap: 9, borderRadius: 16, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  aiToolLabel: { color: colors.text, fontSize: 12, lineHeight: 16, fontWeight: '900' },
+  aiModesRow: { flexDirection: 'row', gap: 10 },
+  aiModeCard: { flex: 1, padding: 14, gap: 5, borderRadius: 17, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  aiModeTitle: { color: colors.text, fontSize: 14, fontWeight: '900' },
+  aiVoiceButton: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primarySoft },
+  aiToolkitHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  aiToolkitCount: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary },
+  aiToolkitCountText: { color: colors.surface, fontSize: 14, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  aiFeatureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  aiFeatureCard: { width: '48.4%', minHeight: 166, padding: 13, gap: 8, borderRadius: 18, borderCurve: 'continuous', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, boxShadow: '0 5px 18px rgba(61,22,22,0.06)' },
+  aiFeatureIcon: { width: 42, height: 42, borderRadius: 14, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center' },
+  aiFeatureCardTitle: { color: colors.text, fontSize: 14, lineHeight: 18, fontWeight: '900' },
+  aiFeatureCardDescription: { minHeight: 34, color: colors.muted, fontSize: 11, lineHeight: 16, fontWeight: '600' },
+  aiFeatureOpen: { paddingTop: 2, flexDirection: 'row', alignItems: 'center', gap: 3 },
+  aiFeatureOpenText: { color: colors.primary, fontSize: 11, fontWeight: '900' },
+  aiFeatureModalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(25,10,10,0.52)' },
+  aiFeatureModalDismiss: { flex: 1 },
+  aiFeatureSheet: { maxHeight: '86%', minHeight: 430, paddingTop: 8, borderTopLeftRadius: 28, borderTopRightRadius: 28, borderCurve: 'continuous', backgroundColor: colors.background },
+  aiFeatureHandle: { width: 42, height: 5, alignSelf: 'center', borderRadius: 99, backgroundColor: '#d1c5c5' },
+  aiFeatureSheetHeader: { paddingHorizontal: 18, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', gap: 11, borderBottomWidth: 1, borderBottomColor: colors.border },
+  aiFeatureSheetTitle: { color: colors.text, fontSize: 19, lineHeight: 24, fontWeight: '900' },
+  aiFeatureClose: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  aiFeatureSheetScroll: { padding: 18, paddingBottom: 34 },
+  aiFeatureBody: { gap: 13 },
+  aiFeatureLead: { color: colors.text, fontSize: 17, lineHeight: 23, fontWeight: '900' },
+  aiFeatureCaption: { color: colors.muted, fontSize: 12, lineHeight: 18, fontWeight: '600', textAlign: 'center' },
+  aiFeatureLabel: { color: colors.text, fontSize: 12, lineHeight: 16, fontWeight: '900' },
+  aiFeatureInput: { minHeight: 50, paddingHorizontal: 14, borderRadius: 15, borderCurve: 'continuous', color: colors.text, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, fontSize: 14, fontWeight: '700' },
+  aiPromptWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  aiPromptChip: { minHeight: 38, paddingHorizontal: 12, paddingVertical: 9, justifyContent: 'center', borderRadius: 13, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  aiPromptChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  aiPromptText: { color: colors.text, fontSize: 11, lineHeight: 16, fontWeight: '800' },
+  aiPromptTextActive: { color: colors.surface },
+  aiInsightCard: { padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 17, borderCurve: 'continuous', backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe' },
+  aiVoiceBody: { alignItems: 'center', paddingVertical: 12 },
+  aiVoiceOrbLarge: { width: 96, height: 96, marginBottom: 8, borderRadius: 34, alignItems: 'center', justifyContent: 'center', backgroundColor: '#db2777', boxShadow: '0 10px 30px rgba(219,39,119,0.28)' },
+  aiVoiceOrbListening: { backgroundColor: colors.primary, transform: [{ scale: 1.06 }] },
+  aiVoiceStart: { minWidth: 170, minHeight: 48, paddingHorizontal: 22, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: '#db2777' },
+  aiVoiceStop: { backgroundColor: colors.primary },
+  aiVoiceStartText: { color: colors.surface, fontSize: 14, fontWeight: '900' },
+  aiCameraPreview: { height: 210, alignItems: 'center', justifyContent: 'center', gap: 14, overflow: 'hidden', borderRadius: 22, borderCurve: 'continuous', backgroundColor: '#171717', borderWidth: 2, borderColor: '#67e8f9' },
+  aiCameraHint: { color: colors.surface, fontSize: 12, fontWeight: '800' },
+  aiLiveCameraWrap: { height: 360, overflow: 'hidden', borderRadius: 22, borderCurve: 'continuous', backgroundColor: '#050505' },
+  aiLiveCamera: { flex: 1 },
+  aiCameraGuide: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: 'rgba(0,0,0,0.08)' },
+  aiCameraControls: { position: 'absolute', left: 18, right: 18, bottom: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  aiCameraControlButton: { width: 46, height: 46, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.58)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.45)' },
+  aiCameraShutter: { width: 72, height: 72, borderRadius: 99, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.28)', borderWidth: 3, borderColor: colors.surface },
+  aiCameraShutterCore: { width: 54, height: 54, borderRadius: 99, backgroundColor: colors.surface },
+  aiCapturedImage: { width: '100%', height: 260, borderRadius: 22, borderCurve: 'continuous', backgroundColor: '#171717' },
+  aiVisionLoading: { minHeight: 58, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 16, backgroundColor: colors.primarySoft },
+  aiVisionError: { padding: 14, flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderRadius: 16, backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca' },
+  aiVisionResult: { gap: 11, padding: 15, borderRadius: 19, borderCurve: 'continuous', backgroundColor: colors.surface, borderWidth: 1, borderColor: '#bbf7d0' },
+  aiVisionResultHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  aiVisionSummary: { color: colors.text, fontSize: 13, lineHeight: 20, fontWeight: '700' },
+  aiVisionSection: { gap: 5, padding: 12, borderRadius: 14, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border },
+  aiVisionText: { color: colors.text, fontSize: 12, lineHeight: 19, fontWeight: '700' },
+  aiPrivacyNote: { color: colors.muted, fontSize: 10, lineHeight: 15, fontWeight: '600', textAlign: 'center' },
+  aiResultCard: { padding: 14, flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderRadius: 16, borderCurve: 'continuous', backgroundColor: colors.primarySoft, borderWidth: 1, borderColor: '#fecaca' },
+  aiReplyingBubble: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  aiResultText: { flex: 1, color: colors.text, fontSize: 12, lineHeight: 19, fontWeight: '700' },
+  aiExpenseSummary: { padding: 16, gap: 4, borderRadius: 19, borderCurve: 'continuous', backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0' },
+  aiExpenseTotal: { color: '#15803d', fontSize: 27, lineHeight: 34, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  aiExpenseRow: { minHeight: 48, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  aiWeatherHero: { padding: 15, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 18, borderCurve: 'continuous', backgroundColor: '#fefce8', borderWidth: 1, borderColor: '#fde68a' },
+  aiAdviceRow: { minHeight: 54, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 15, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  aiSafetyAlert: { padding: 14, flexDirection: 'row', alignItems: 'flex-start', gap: 11, borderRadius: 17, borderCurve: 'continuous', backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca' },
+  aiEmergencyGrid: { flexDirection: 'row', gap: 8 },
+  aiEmergencyCard: { flex: 1, paddingVertical: 14, alignItems: 'center', gap: 3, borderRadius: 15, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  aiEmergencyNumber: { color: '#dc2626', fontSize: 20, lineHeight: 25, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  aiLocalRow: { minHeight: 72, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+
   emptyState: { alignItems: 'center', justifyContent: 'center', padding: 32, gap: 8 },
   emptyIcon: {
     height: 64, width: 64, borderRadius: 16, backgroundColor: colors.primarySoft,
@@ -6852,4 +8988,89 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { color: colors.text, fontSize: 16, fontWeight: '900' },
   emptyBody: { color: colors.muted, fontSize: 13, fontWeight: '600', textAlign: 'center' },
+
+  // WordPress News Section & Modal Styles
+  newsTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  newsTitleIconWrap: { width: 28, height: 28, borderRadius: 9, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  newsSubtext: { color: colors.muted, fontSize: 11, fontWeight: '600', marginTop: 2 },
+  newsHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  newsIconButton: { width: 32, height: 32, borderRadius: 10, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  newsConfigChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: colors.primarySoft, borderWidth: 1, borderColor: colors.primary + '30' },
+  newsConfigChipText: { color: colors.primary, fontSize: 12, fontWeight: '800' },
+  newsErrorBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, marginHorizontal: 16, borderRadius: 12, backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#fde047' },
+  newsErrorText: { color: '#92400e', fontSize: 12, fontWeight: '600', flex: 1 },
+  newsLoadingRail: { paddingVertical: 24, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  newsLoadingText: { color: colors.muted, fontSize: 12, fontWeight: '600' },
+
+  v2NewsCard: { width: 240, borderRadius: 18, borderCurve: 'continuous', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, overflow: 'hidden', boxShadow: '0 4px 14px rgba(0,0,0,0.04)' },
+  v2NewsImage: { width: '100%', height: 130, backgroundColor: colors.border },
+  v2NewsBadge: { position: 'absolute', top: 10, left: 10, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.65)' },
+  v2NewsBadgeText: { color: colors.surface, fontSize: 10, fontWeight: '800' },
+  v2NewsBody: { padding: 12, gap: 6 },
+  v2NewsTitle: { color: colors.text, fontSize: 14, lineHeight: 18, fontWeight: '800' },
+  v2NewsExcerpt: { color: colors.muted, fontSize: 12, lineHeight: 16, fontWeight: '500' },
+  v2NewsMetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, paddingTop: 6, borderTopWidth: 1, borderTopColor: colors.border },
+  v2NewsMetaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  v2NewsMetaText: { color: colors.muted, fontSize: 11, fontWeight: '600' },
+  v2NewsReadTime: { color: colors.primary, fontSize: 11, fontWeight: '800' },
+
+  newsModalSafeArea: { flex: 1, backgroundColor: colors.background },
+  newsModalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.surface },
+  newsModalCloseBtn: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border },
+  newsModalTabSwitcher: { flexDirection: 'row', backgroundColor: colors.background, borderRadius: 12, padding: 3, borderWidth: 1, borderColor: colors.border },
+  newsModalTab: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 9 },
+  newsModalTabActive: { backgroundColor: colors.primary },
+  newsModalTabText: { color: colors.muted, fontSize: 12, fontWeight: '700' },
+  newsModalTabTextActive: { color: colors.surface, fontWeight: '900' },
+
+  newsReaderContent: { padding: 20, gap: 14 },
+  newsReaderHeroImg: { width: '100%', height: 220, borderRadius: 18, borderCurve: 'continuous', backgroundColor: colors.border },
+  newsReaderCategoryWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  newsReaderCategory: { color: colors.primary, fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  newsReaderDot: { color: colors.muted, fontSize: 12 },
+  newsReaderReadTime: { color: colors.muted, fontSize: 12, fontWeight: '600' },
+  newsReaderTitle: { color: colors.text, fontSize: 22, lineHeight: 28, fontWeight: '900' },
+  newsReaderMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  newsReaderMetaText: { color: colors.muted, fontSize: 12, fontWeight: '600' },
+  newsReaderDivider: { height: 1, backgroundColor: colors.border, marginVertical: 4 },
+  newsReaderBody: { color: colors.text, fontSize: 15, lineHeight: 24, fontWeight: '500' },
+  newsReaderCtaBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 14, backgroundColor: colors.primary, marginTop: 12 },
+  newsReaderCtaText: { color: colors.surface, fontSize: 14, fontWeight: '800' },
+  newsWebLoading: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
+
+  wpConfigModalBox: { width: '90%', maxWidth: 440, padding: 20, borderRadius: 22, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, gap: 14 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' },
+  modalHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  modalHeaderTitle: { color: colors.text, fontSize: 16, fontWeight: '900' },
+  wpConfigDesc: { color: colors.muted, fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  wpSheetBox: { padding: 12, borderRadius: 14, backgroundColor: colors.primarySoft, borderWidth: 1, borderColor: colors.primary + '30', gap: 8 },
+  wpSheetHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  wpSheetTitle: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  wpSheetLinkBtn: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: colors.surface },
+  wpSheetLinkText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
+  wpSyncSheetBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8, borderRadius: 10, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  wpSyncSheetBtnText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
+  wpSheetCategoryNotice: { color: colors.muted, fontSize: 12, fontWeight: '600', marginTop: 2 },
+  wpConfigLabel: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  wpConfigInput: { height: 48, paddingHorizontal: 14, borderRadius: 12, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, color: colors.text, fontSize: 14, fontWeight: '600' },
+  wpPresetRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  wpPresetLabel: { color: colors.muted, fontSize: 12, fontWeight: '600' },
+  wpPresetChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, backgroundColor: colors.primarySoft, borderWidth: 1, borderColor: colors.primary + '30' },
+  wpPresetChipText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
+  wpModalActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 10, marginTop: 6 },
+  wpCancelBtn: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border },
+  wpCancelText: { color: colors.text, fontSize: 13, fontWeight: '700' },
+  wpSaveBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12, backgroundColor: colors.primary },
+  wpSaveText: { color: colors.surface, fontSize: 13, fontWeight: '800' },
+
+  newsTabsRail: { flexDirection: 'row', gap: 8, paddingHorizontal: 4, marginBottom: 12 },
+  newsTabChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border },
+  newsTabChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  newsTabChipText: { color: colors.muted, fontSize: 12, fontWeight: '700' },
+  newsTabChipTextActive: { color: colors.surface, fontWeight: '800' },
+
+  newsLoadMoreCard: { width: 140, minHeight: 210, padding: 14, borderRadius: 20, borderCurve: 'continuous', backgroundColor: colors.primarySoft, borderWidth: 1, borderColor: colors.primary + '30', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  newsLoadMoreIconCircle: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
+  newsLoadMoreTitle: { color: colors.text, fontSize: 13, fontWeight: '800', textAlign: 'center' },
+  newsLoadMoreSub: { color: colors.primary, fontSize: 11, fontWeight: '700', textAlign: 'center' },
 });

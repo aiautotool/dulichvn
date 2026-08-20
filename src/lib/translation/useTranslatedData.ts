@@ -56,7 +56,10 @@ export function useTranslatedData<T>(sourceData: T) {
     return () => {
       cancelled = true;
     };
-  }, [dependencyKey, sourceData, targetLanguage]);
+  // dependencyKey already captures both the language and a stable serialization
+  // of sourceData. Depending on the source object reference as well causes an
+  // update loop when callers build an equivalent array/object during render.
+  }, [dependencyKey]);
 
   return state;
 }

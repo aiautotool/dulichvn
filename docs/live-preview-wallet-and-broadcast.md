@@ -48,3 +48,31 @@ The broad all-users topic satisfies the requirement that everyone who installed 
 ## Security notes
 
 In production, clients must not directly edit wallet balances, payout status, or escrow state. These actions should run from a trusted backend or Firebase Cloud Functions after verifying Firebase ID tokens.
+
+## User-to-user video calls
+
+Native iOS and Android builds use LiveKit WebRTC rooms. The traveler and helper receive separate, short-lived join tokens for the same live-preview request room. The call UI supports remote/local video, microphone and camera toggles, camera switching, connection state, retry, and hang-up.
+
+Configure the Worker before testing:
+
+```bash
+npx wrangler secret put LIVEKIT_URL
+npx wrangler secret put LIVEKIT_API_KEY
+npx wrangler secret put LIVEKIT_API_SECRET
+npm run deploy:cloudflare
+```
+
+`FIREBASE_PROJECT_ID` is a non-secret Worker variable in `wrangler.jsonc`. The token endpoint verifies Firebase ID-token signatures and issues LiveKit tokens that expire after 15 minutes. Never add `LIVEKIT_API_SECRET` to an `EXPO_PUBLIC_` environment variable.
+
+LiveKit requires native modules, so rebuild the app after installing or changing the LiveKit plugins:
+
+```bash
+npx expo prebuild
+npm run ios
+# or
+npm run android
+```
+
+This feature is not available in Expo Go. The web build uses the LiveKit browser SDK and exchanges the signed-in QR web session for a short-lived, server-verifiable call credential. Browser users must allow camera and microphone access when joining.
+
+On the website, open **Khám phá**, select a destination, choose **SHOW ME NOW — $1**, then join after a helper accepts the request. The accepted helper opens the same call from the local-helper jobs screen.
