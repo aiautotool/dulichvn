@@ -9,6 +9,8 @@ ROOT_DOMAIN="${ROOT_DOMAIN:-aiautotool.com}"
 SUBDOMAIN="${SUBDOMAIN:-vinago.aiautotool.com}"
 DNS_NAME="${DNS_NAME:-vinago}"
 WRANGLER_VERSION="${WRANGLER_VERSION:-4.103.0}"
+WEB_OUTPUT_DIR="${WEB_OUTPUT_DIR:-/tmp/vinago-plus-web-dist}"
+MANAGE_DNS="${MANAGE_DNS:-0}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -57,36 +59,41 @@ if [[ -z "$CLOUDFLARE_ACCOUNT_ID" || "$CLOUDFLARE_ACCOUNT_ID" == "null" ]]; then
 fi
 echo "Account ID: ${CLOUDFLARE_ACCOUNT_ID}"
 
-echo "Checking Cloudflare zone ${ROOT_DOMAIN}..."
-zones_json="$(curl -fsS "${API_BASE}/zones?name=${ROOT_DOMAIN}" "${auth_headers[@]}")"
-ZONE_ID="$(jq -r '.result[0].id' <<<"$zones_json")"
-if [[ -z "$ZONE_ID" || "$ZONE_ID" == "null" ]]; then
-  echo "Could not resolve zone for ${ROOT_DOMAIN}." >&2
-  echo "$zones_json" | jq
-  exit 1
-fi
-echo "Zone ID: ${ZONE_ID}"
+if [[ "$MANAGE_DNS" == "1" ]]; then
+  echo "Checking Cloudflare zone ${ROOT_DOMAIN}..."
+  zones_json="$(curl -fsS "${API_BASE}/zones?name=${ROOT_DOMAIN}" "${auth_headers[@]}")"
+  ZONE_ID="$(jq -r '.result[0].id' <<<"$zones_json")"
+  if [[ -z "$ZONE_ID" || "$ZONE_ID" == "null" ]]; then
+    echo "Could not resolve zone for ${ROOT_DOMAIN}." >&2
+    echo "$zones_json" | jq
+    exit 1
+  fi
+  echo "Zone ID: ${ZONE_ID}"
 
-echo "Ensuring proxied DNS record ${SUBDOMAIN}..."
-record_json="$(curl -fsS "${API_BASE}/zones/${ZONE_ID}/dns_records?type=AAAA&name=${SUBDOMAIN}" "${auth_headers[@]}")"
-record_id="$(jq -r '.result[0].id // empty' <<<"$record_json")"
+  echo "Ensuring proxied DNS record ${SUBDOMAIN}..."
+  record_json="$(curl -fsS "${API_BASE}/zones/${ZONE_ID}/dns_records?type=AAAA&name=${SUBDOMAIN}" "${auth_headers[@]}")"
+  record_id="$(jq -r '.result[0].id // empty' <<<"$record_json")"
 
-if [[ -z "$record_id" ]]; then
-  curl -fsS -X POST "${API_BASE}/zones/${ZONE_ID}/dns_records" \
-    "${auth_headers[@]}" \
-    -H "Content-Type: application/json" \
-    --data "{\"type\":\"AAAA\",\"name\":\"${DNS_NAME}\",\"content\":\"100::\",\"ttl\":1,\"proxied\":true}" \
-    | jq
+  if [[ -z "$record_id" ]]; then
+    curl -fsS -X POST "${API_BASE}/zones/${ZONE_ID}/dns_records" \
+      "${auth_headers[@]}" \
+      -H "Content-Type: application/json" \
+      --data "{\"type\":\"AAAA\",\"name\":\"${DNS_NAME}\",\"content\":\"100::\",\"ttl\":1,\"proxied\":true}" \
+      | jq
+  else
+    curl -fsS -X PATCH "${API_BASE}/zones/${ZONE_ID}/dns_records/${record_id}" \
+      "${auth_headers[@]}" \
+      -H "Content-Type: application/json" \
+      --data "{\"type\":\"AAAA\",\"name\":\"${DNS_NAME}\",\"content\":\"100::\",\"ttl\":1,\"proxied\":true}" \
+      | jq
+  fi
 else
-  curl -fsS -X PATCH "${API_BASE}/zones/${ZONE_ID}/dns_records/${record_id}" \
-    "${auth_headers[@]}" \
-    -H "Content-Type: application/json" \
-    --data "{\"type\":\"AAAA\",\"name\":\"${DNS_NAME}\",\"content\":\"100::\",\"ttl\":1,\"proxied\":true}" \
-    | jq
+  echo "Keeping existing Workers Custom Domain DNS for ${SUBDOMAIN}."
 fi
 
 echo "Exporting Expo web build..."
-npm run export:web
+rm -rf "$WEB_OUTPUT_DIR"
+npx expo export --platform web --output-dir "$WEB_OUTPUT_DIR"
 
 echo "Deploying Worker static assets with Wrangler ${WRANGLER_VERSION}..."
 CI=1 \
@@ -94,7 +101,8 @@ WRANGLER_SEND_METRICS=false \
 CLOUDFLARE_EMAIL="$CLOUDFLARE_EMAIL" \
 CLOUDFLARE_API_KEY="$CLOUDFLARE_API_KEY" \
 CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
-npx --yes "wrangler@${WRANGLER_VERSION}" deploy --config wrangler.jsonc
+npx --yes "wrangler@${WRANGLER_VERSION}" deploy --config wrangler.jsonc \
+  --assets "$WEB_OUTPUT_DIR"
 
 echo "Testing ${SUBDOMAIN}..."
 curl -I "https://${SUBDOMAIN}" || true

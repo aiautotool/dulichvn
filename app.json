@@ -2,20 +2,44 @@
   "expo": {
     "name": "Vinago+",
     "slug": "vinago-plus",
-    "version": "1.0.1",
+    "version": "1.0.5",
     "scheme": "vinagoplus",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "bundleIdentifier": "com.vinago.plus",
+      "bundleIdentifier": "com.vinago.dev",
+      "buildNumber": "8",
       "googleServicesFile": "./GoogleService-Info.plist",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bitcode": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["audio", "location"]
+      }
     },
     "android": {
       "package": "com.vinago.dev",
-      "versionCode": 2,
+      "versionCode": 8,
       "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "com.android.vending.BILLING",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.INTERNET",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WAKE_LOCK",
+        "android.permission.BLUETOOTH",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#DA251D",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -34,6 +58,9 @@
         "propertyName": "vinago-e7476",
         "propertyId": "542368554",
         "streamId": "15118007638"
+      },
+      "eas": {
+        "projectId": "0ee75832-5864-4cc7-99dd-efcd97f90856"
       }
     },
     "plugins": [
@@ -52,17 +79,54 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Allow Vinago+ to use your location to show nearby live preview jobs."
+          "locationWhenInUsePermission": "Allow Vinago+ to use your location while using the app for nearby places, maps, weather, safety alerts, local prices, and Live Team tracking.",
+          "locationAlwaysAndWhenInUsePermission": "Allow Vinago+ to share your location with your Live Team while traveling, including when the app is in the background.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Vinago+ to use your camera to scan web login QR codes.",
-          "recordAudioAndroid": false,
+          "cameraPermission": "Allow Vinago+ to use your camera for AI travel image analysis and web login QR codes.",
+          "microphonePermission": "Allow Vinago+ to use your microphone during video calls.",
+          "recordAudioAndroid": true,
           "barcodeScannerEnabled": true
         }
-      ]
-    ]
+      ],
+      "@livekit/react-native-expo-plugin",
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Allow Vinago+ to use your camera during video calls.",
+          "microphonePermission": "Allow Vinago+ to use your microphone during video calls."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Cho phép Vinago+ sử dụng micro để gọi và gửi tin nhắn thoại.",
+          "recordAudioAndroid": true,
+          "enableBackgroundPlayback": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Cho phép Vinago+ truy cập thư viện để gửi ảnh và video trong chat."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#DA251D",
+          "defaultChannel": "member-calls-v2"
+        }
+      ],
+      "expo-asset",
+      "expo-sharing"
+    ],
+    "owner": "kechettreo"
   }
 }

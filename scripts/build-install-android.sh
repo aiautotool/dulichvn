@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Expo config reads NODE_ENV while Gradle assembles the native project.
+export NODE_ENV="${NODE_ENV:-development}"
+
 ANDROID_TARGET="${ANDROID_DEVICE:-${EXPO_DEVICE:-}}"
 device_args=(--device)
 if [[ -n "$ANDROID_TARGET" ]]; then

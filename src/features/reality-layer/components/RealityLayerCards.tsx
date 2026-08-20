@@ -91,8 +91,8 @@ export function RealityActionButtons({ onLivePreview }: { onLivePreview: () => v
       <Pressable style={styles.primaryAction} onPress={onLivePreview}>
         <Camera color="#fff" size={18} />
         <View style={styles.flex}>
-          <Text style={styles.primaryActionTitle}>SHOW ME NOW — $1</Text>
-          <Text style={styles.primaryActionSub}>Find a nearby local for a live preview.</Text>
+          <Text style={styles.primaryActionTitle}>VIDEO CALL — SHOW ME NOW · $1</Text>
+          <Text style={styles.primaryActionSub}>Call a nearby local for a live video preview.</Text>
         </View>
         <ChevronRight color="#fff" size={18} />
       </Pressable>

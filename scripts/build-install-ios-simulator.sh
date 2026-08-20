@@ -10,4 +10,8 @@ if [[ -n "$IOS_SIMULATOR_TARGET" ]]; then
   device_args=(--device "$IOS_SIMULATOR_TARGET")
 fi
 
-exec npx expo run:ios "${device_args[@]}" "$@"
+exec npx expo run:ios \
+  --configuration Release \
+  --no-bundler \
+  "${device_args[@]}" \
+  "$@"

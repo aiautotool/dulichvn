@@ -1,0 +1,24 @@
+import { useMemo } from 'react';
+import { StyleSheet, View } from 'react-native';
+import { WebView } from 'react-native-webview';
+import type { LiveTeamMember, LiveTeamRoute } from '../types';
+
+export function LiveTeamMap({ members, userId, route = null, followUserId = null }: { members: LiveTeamMember[]; userId: string; route?: LiveTeamRoute | null; followUserId?: string | null }) {
+  const html = useMemo(() => mapHtml(members, userId, route, followUserId), [followUserId, members, route, userId]);
+  return <View style={styles.root}><WebView source={{ html }} originWhitelist={['*']} javaScriptEnabled scrollEnabled={false} style={styles.webview} /></View>;
+}
+
+function mapHtml(members: LiveTeamMember[], userId: string, route: LiveTeamRoute | null, followUserId: string | null) {
+  const points = members.filter((member) => member.locationSharing && member.location).map((member) => ({
+    id: member.userId,
+    name: member.userId === userId ? 'Bạn' : member.name,
+    lat: member.location!.latitude,
+    lng: member.location!.longitude,
+    heading: member.location!.heading ?? 0,
+    icon: member.transportationMode,
+    speaking: member.isSpeaking,
+  }));
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>html,body,#map{height:100%;margin:0;background:#e7efe8}.pin{font-size:23px;background:white;border:3px solid #168755;border-radius:50%;width:42px;height:42px;display:grid;place-items:center;box-shadow:0 2px 8px #0003}.pin.s{border-color:#16a34a;background:#dcfce7;transform:scale(1.12)}.nav-pin{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:#fff;border:2px solid #fff;box-shadow:0 2px 10px #0005}.nav-arrow{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:#2563eb;color:#fff;font:900 22px/1 system-ui;box-shadow:0 0 0 3px #93c5fd88}.route-pin{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:#168755;color:#fff;border:3px solid #fff;font:900 12px system-ui;box-shadow:0 2px 8px #0004}.route-pin.last{background:#da251d}.leaflet-tooltip{font:800 11px system-ui;border:0;border-radius:7px;box-shadow:0 1px 5px #0002}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const p=${JSON.stringify(points).replace(/</g, '\\u003c')};const r=${JSON.stringify(route).replace(/</g, '\\u003c')};const f=${JSON.stringify(followUserId)};const icons={WALKING:'🚶',MOTORBIKE:'🏍️',CAR:'🚗',BUS:'🚌',TRAIN:'🚆',AIRPLANE:'✈️',BICYCLE:'🚲',OTHER:'📍'};const map=L.map('map',{zoomControl:false,attributionControl:false});L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);const b=[];if(r&&r.path.length){const line=r.path.map(x=>[x.latitude,x.longitude]);line.forEach(x=>b.push(x));L.polyline(line,{color:'#fff',weight:10,opacity:.9}).addTo(map);L.polyline(line,{color:'#2563eb',weight:6,opacity:1}).addTo(map);const rp=[r.origin,...(r.stops||[]),r.destination];rp.forEach((x,i)=>{if(f&&i===0)return;const letter=String.fromCharCode(65+i);L.marker([x.latitude,x.longitude],{icon:L.divIcon({className:'',html:'<div class="route-pin '+(i===rp.length-1?'last':'')+'">'+letter+'</div>',iconSize:[36,36],iconAnchor:[18,18]})}).addTo(map).bindTooltip(x.label,{direction:'top'})})}p.forEach(x=>{const following=x.id===f;const html=following?'<div class="nav-pin"><div class="nav-arrow" style="transform:rotate('+x.heading+'deg)">▲</div></div>':'<div class="pin '+(x.speaking?'s':'')+'">'+icons[x.icon]+'</div>';L.marker([x.lat,x.lng],{zIndexOffset:following?1000:0,icon:L.divIcon({className:'',html,iconSize:[48,48],iconAnchor:[24,24]})}).addTo(map).bindTooltip(x.name+(x.speaking?' · ĐANG NÓI':''),{permanent:!following,direction:'bottom',offset:[0,21]})});const followed=p.find(x=>x.id===f);if(followed)map.setView([followed.lat,followed.lng],17,{animate:false});else if(b.length)map.fitBounds(b,{padding:[42,42],maxZoom:17});else if(p.length)map.fitBounds(p.map(x=>[x.lat,x.lng]),{padding:[42,42],maxZoom:17});else map.setView([16.05,108.2],5);</script></body></html>`;
+}
+
+const styles = StyleSheet.create({ root: { flex: 1 }, webview: { flex: 1, backgroundColor: '#e7efe8' } });

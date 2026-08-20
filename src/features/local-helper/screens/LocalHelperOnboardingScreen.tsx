@@ -8,7 +8,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import * as Location from 'expo-location';
 import { MapPin, ShieldAlert, UserCircle } from 'lucide-react-native';
 import type { LocalHelperProfile, SaveLocalHelperProfileInput } from '../types';
 
@@ -20,6 +19,7 @@ type Props = {
   errorMessage: string | null;
   onSaveProfile: (input: SaveLocalHelperProfileInput) => Promise<void> | void;
   onSetOnline: (input: { isOnline: boolean; currentLat: number | null; currentLng: number | null }) => Promise<void> | void;
+  requestCurrentLocation: () => Promise<{ lat: number; lng: number } | null>;
 };
 
 const languageOptions = ['English', 'Vietnamese', 'Korean', 'Japanese', 'Chinese'];
@@ -32,6 +32,7 @@ export function LocalHelperOnboardingScreen({
   errorMessage,
   onSaveProfile,
   onSetOnline,
+  requestCurrentLocation,
 }: Props) {
   const [fullName, setFullName] = useState(initialName);
   const [email, setEmail] = useState(initialEmail);
@@ -93,19 +94,15 @@ export function LocalHelperOnboardingScreen({
         return;
       }
 
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== 'granted') {
+      const position = await requestCurrentLocation();
+      if (!position) {
         setLocalError('Location permission is required to show nearby live preview jobs.');
         return;
       }
-
-      const position = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
       await onSetOnline({
         isOnline: true,
-        currentLat: position.coords.latitude,
-        currentLng: position.coords.longitude,
+        currentLat: position.lat,
+        currentLng: position.lng,
       });
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : 'Could not update helper location');

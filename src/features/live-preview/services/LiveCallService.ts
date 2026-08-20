@@ -41,6 +41,27 @@ export class MockLiveCallProviderAdapter implements LiveCallProviderAdapter {
   }
 }
 
+export class LiveKitCallProviderAdapter implements LiveCallProviderAdapter {
+  readonly provider: LiveCallProvider = 'livekit';
+
+  async createRoom(request: LivePreviewRequest): Promise<{ roomId: string }> {
+    return { roomId: request.callRoomId ?? `vinago-live-${request.id}` };
+  }
+
+  async joinRoom(roomId: string): Promise<LiveCallRoomJoinResult> {
+    return {
+      roomId,
+      provider: this.provider,
+      usesMockMedia: false,
+      signalingStatus: 'ready',
+    };
+  }
+
+  async leaveRoom(): Promise<void> {
+    return;
+  }
+}
+
 function createId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }

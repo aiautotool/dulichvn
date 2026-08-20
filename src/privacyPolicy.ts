@@ -1,4 +1,4 @@
-const effectiveDate = 'July 3, 2026';
+const effectiveDate = 'July 18, 2026';
 
 export function privacyPolicyResponse() {
   return new Response(renderPrivacyPolicy(), {
@@ -182,8 +182,30 @@ function renderPrivacyPolicy() {
           <li>Account information from Google Sign-In, such as your name, email address, profile photo, and Google account identifier.</li>
           <li>Travel preferences, such as language, trip purpose, current city, trip length, favorites, recent searches, and saved activity history.</li>
           <li>AI itinerary requests and generated itinerary content that you ask us to create or email to you.</li>
+          <li>Precise location data, including latitude, longitude, accuracy, speed, heading, altitude, and timestamp, when you choose to use location-based features.</li>
           <li>Device and usage information, such as app events, browser type, approximate region, pages viewed, and diagnostics.</li>
         </ul>
+
+        <h2>Location Data and Live Team</h2>
+        <p>
+          Most location-based features, such as nearby places, directions, local weather, safety
+          information, and nearby Local Helper jobs, use location only while the app is open.
+        </p>
+        <p>
+          If you turn on <strong>Share GPS</strong> inside a Live Team room, Vinago+ collects and
+          sends your precise location in the background, including when the app is closed or not
+          in active use. This keeps your live position visible to members of the Live Team you
+          joined while your trip is in progress. Vinago+ does not use this background location
+          for advertising.
+        </p>
+        <p>
+          Live Team location is transmitted to our Cloudflare-hosted service and shared with
+          authenticated members of the same team. A current location snapshot is stored so the
+          team map can stay synchronized; stale snapshots are excluded from the live map and
+          cleaned up by the service. You can stop collection by turning off <strong>Share GPS</strong>,
+          leaving the team, revoking the location permission in device settings, or uninstalling
+          the app.
+        </p>
 
         <h2>Local Storage</h2>
         <p>
@@ -195,6 +217,7 @@ function renderPrivacyPolicy() {
         <h2>How We Use Information</h2>
         <ul>
           <li>Provide, personalize, and improve trip planning features.</li>
+          <li>Show your live position to members of a Live Team when you explicitly enable GPS sharing.</li>
           <li>Save your preferences, favorites, and account state.</li>
           <li>Send itinerary confirmations when you request email delivery.</li>
           <li>Measure app reliability, performance, and feature usage.</li>
